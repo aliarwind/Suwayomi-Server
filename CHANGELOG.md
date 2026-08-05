@@ -7,10 +7,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased] (Preview)
 
 ### Added
-- .
+- (**Downloads**) Try to preserve downloaded files during a chapter list update for chapters with title and/or scanlator change
+- (**Logs**) Add IP location logging
 
 ### Changed
-- .
+- (**SystemTray**) Disable DorkBox update requests
+- (**GraphQL**) Updated GraphiQL GraphQL Playground
+- (**Downloader**) Skip LocalSource downloading
+
+### Fixed
+- (**Tracker**) Fix Shikimori
+- (**Extension**) Fix losing installed extension in case the update fails
+- (**Source/API**) Fix graphql browse mutation (`fetchSourceManga`) with filters including nested group changes
+- (**HTML**) Fix HTML being sent with gibberish when using non-latin characters
+- (**OPDS**) Fix OPDS search charset
+
+## [v2.3.2243] - 2026-07-13
+
+### Added
+- (**Extension**) Add ability to install jar versions of extensions
 
 ### Fixed
 - (**Extension**) Fix missing memo field in getPageList
@@ -500,7 +515,8 @@ Huge thanks to @martinek who pulled the most of the weight this release!
 
 <!-- SERVER LINKS -->
 
-[unreleased]: https://github.com/suwayomi/suwayomi-server/compare/v2.3.2238...HEAD
+[unreleased]: https://github.com/suwayomi/suwayomi-server/compare/v2.3.2243...HEAD
+[v2.3.2243]: https://github.com/suwayomi/suwayomi-server/compare/v2.3.2238...v2.3.2243
 [v2.3.2238]: https://github.com/suwayomi/suwayomi-server/compare/v2.3.2232...v2.3.2238
 [v2.3.2232]: https://github.com/suwayomi/suwayomi-server/compare/v2.3.2230...v2.3.2232
 [v2.3.2230]: https://github.com/suwayomi/suwayomi-server/compare/v2.3.2223...v2.3.2230
