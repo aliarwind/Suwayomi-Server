@@ -206,9 +206,90 @@ tasks {
 
     named<Copy>("processResources") {
         duplicatesStrategy = DuplicatesStrategy.INCLUDE
-        mustRunAfter("downloadWebUI")
+        mustRunAfter("buildLocalWebUI")
     }
 
+    /**
+     * Builds the WebUI from the local Suwayomi-WebUI repository and packages it as WebUI.zip.
+     * Set the Gradle property "webui.skip" to "true" to skip this task (e.g. -Pwebui.skip=true).
+     * The local WebUI path can be overridden via -Pwebui.path=../Suwayomi-WebUI.
+     */
+    register("buildLocalWebUI") {
+        group = "build"
+        description = "Build WebUI from local Suwayomi-WebUI repository"
+
+        val localWebUIPath = project.findProperty("webui.path") as? String
+            ?: "${rootProject.projectDir}/../Suwayomi-WebUI"
+
+        val pnpmCmd = sequenceOf(
+            "${System.getenv("APPDATA")}\\npm\\pnpm.cmd",
+            "${System.getenv("HOME")}/.local/share/pnpm/pnpm",
+            "/usr/local/bin/pnpm",
+            "pnpm",
+        ).firstOrNull { candidate ->
+            runCatching {
+                ProcessBuilder(candidate, "--version")
+                    .redirectErrorStream(true)
+                    .start()
+                    .waitFor() == 0
+            }.getOrDefault(false)
+        } ?: "pnpm"
+
+        val webuiBuildDir = "$localWebUIPath/build"
+        val destZip = "${project.projectDir}/src/main/resources/WebUI.zip"
+
+        onlyIf {
+            val skip = project.findProperty("webui.skip") as? String
+            if (skip == "true") {
+                logger.lifecycle("Skipping local WebUI build (webui.skip=true)")
+                return@onlyIf false
+            }
+            true
+        }
+
+        outputs.file(destZip)
+
+        doLast {
+            fun runCommand(vararg cmd: String, workDir: File) {
+                logger.lifecycle("  Running: ${cmd.joinToString(" ")} (in $workDir)")
+                val process = ProcessBuilder(*cmd)
+                    .directory(workDir)
+                    .inheritIO()
+                    .start()
+                val exitCode = process.waitFor()
+                if (exitCode != 0) {
+                    throw GradleException("Command failed with exit code $exitCode: ${cmd.joinToString(" ")}")
+                }
+            }
+
+            // Step 1: Install dependencies if needed
+            if (!file("$localWebUIPath/node_modules").exists()) {
+                logger.lifecycle("Installing WebUI dependencies...")
+                runCommand(pnpmCmd, "install", workDir = file(localWebUIPath))
+            }
+
+            // Step 2: Build WebUI
+            logger.lifecycle("Building WebUI from $localWebUIPath...")
+            runCommand(pnpmCmd, "run", "build", workDir = file(localWebUIPath))
+
+            // Step 3: Package build output into WebUI.zip
+            val destFile = file(destZip)
+            destFile.parentFile.mkdirs()
+
+            ant.invokeMethod(
+                "zip",
+                mapOf(
+                    "destfile" to destZip,
+                    "level" to "9",
+                    "basedir" to webuiBuildDir,
+                ),
+            )
+
+            logger.lifecycle("WebUI.zip built from local source: $destZip (${destFile.length() / 1024} KB)")
+        }
+    }
+
+    // Keep the original downloadWebUI as a fallback for CI
     register<Download>("downloadWebUI") {
         src("https://github.com/Suwayomi/Suwayomi-WebUI-preview/releases/download/$webUIRevisionTag/Suwayomi-WebUI-$webUIRevisionTag.zip")
         dest("src/main/resources/WebUI.zip")
@@ -233,6 +314,15 @@ tasks {
         }
 
         overwrite(shouldOverwrite())
+        onlyIf {
+            // Skip download if local build already produced the zip
+            val zipFile = file("src/main/resources/WebUI.zip")
+            if (zipFile.exists()) {
+                logger.lifecycle("WebUI.zip already exists, skipping remote download")
+                return@onlyIf false
+            }
+            true
+        }
     }
 
     register("runElectron") {

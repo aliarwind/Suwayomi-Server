@@ -13,4 +13,9 @@ import org.jetbrains.exposed.v1.core.dao.id.IntIdTable
 object CategoryMangaTable : IntIdTable() {
     val category = reference("category", CategoryTable, ReferenceOption.CASCADE)
     val manga = reference("manga", MangaTable, ReferenceOption.CASCADE)
+
+    init {
+        index(false, category)
+        index(false, manga)
+    }
 }

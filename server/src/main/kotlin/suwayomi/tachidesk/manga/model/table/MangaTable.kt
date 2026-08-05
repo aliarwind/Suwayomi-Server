@@ -50,6 +50,10 @@ object MangaTable : IntIdTable() {
     val version = long("version").default(0)
     val isSyncing = bool("is_syncing").default(false)
     val memo = unlimitedVarchar("memo")
+
+    init {
+        index(false, inLibrary)
+    }
 }
 
 fun MangaTable.toDataClass(mangaEntry: ResultRow) =

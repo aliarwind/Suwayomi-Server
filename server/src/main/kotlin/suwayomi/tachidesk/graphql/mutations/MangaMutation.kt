@@ -13,6 +13,7 @@ import org.jetbrains.exposed.v1.core.inList
 import org.jetbrains.exposed.v1.core.like
 import org.jetbrains.exposed.v1.core.or
 import org.jetbrains.exposed.v1.jdbc.deleteWhere
+import org.jetbrains.exposed.v1.jdbc.select
 import org.jetbrains.exposed.v1.jdbc.selectAll
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import org.jetbrains.exposed.v1.jdbc.update
@@ -21,8 +22,10 @@ import suwayomi.tachidesk.graphql.types.ChapterType
 import suwayomi.tachidesk.graphql.types.MangaMetaType
 import suwayomi.tachidesk.graphql.types.MangaType
 import suwayomi.tachidesk.graphql.types.MetaInput
+import suwayomi.tachidesk.manga.impl.Chapter
 import suwayomi.tachidesk.manga.impl.Library
 import suwayomi.tachidesk.manga.impl.Manga
+import suwayomi.tachidesk.manga.impl.download.DownloadManager
 import suwayomi.tachidesk.manga.impl.update.IUpdater
 import suwayomi.tachidesk.manga.model.table.ChapterTable
 import suwayomi.tachidesk.manga.model.table.MangaMetaTable
@@ -97,6 +100,27 @@ class MangaMutation {
 
                 ids.forEach {
                     Library.handleMangaThumbnail(it, patch.inLibrary)
+                }
+
+                // When removing from library, clean up downloads for these manga
+                if (!patch.inLibrary) {
+                    ids.forEach { mangaId ->
+                        try {
+                            val chapterIds =
+                                transaction {
+                                    ChapterTable
+                                        .select(ChapterTable.id)
+                                        .where { ChapterTable.manga eq mangaId }
+                                        .map { it[ChapterTable.id].value }
+                                }
+                            if (chapterIds.isNotEmpty()) {
+                                Chapter.deleteChapters(chapterIds)
+                                DownloadManager.dequeue(DownloadManager.EnqueueInput(chapterIds))
+                            }
+                        } catch (e: Exception) {
+                            // Ignore errors during download cleanup
+                        }
+                    }
                 }
             }
         }

@@ -46,6 +46,11 @@ object ChapterTable : IntIdTable() {
     val isSyncing = bool("is_syncing").default(false)
 
     val memo = unlimitedVarchar("memo")
+
+    init {
+        index(false, manga)
+        index(false, isDownloaded)
+    }
 }
 
 fun ChapterTable.toDataClass(chapterEntry: ResultRow) =

@@ -13,11 +13,15 @@ import graphql.schema.DataFetchingEnvironment
 import org.jetbrains.exposed.v1.core.Column
 import org.jetbrains.exposed.v1.core.Op
 import org.jetbrains.exposed.v1.core.SortOrder
+import org.jetbrains.exposed.v1.core.count
+import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.core.greater
+import org.jetbrains.exposed.v1.core.greaterEq
 import org.jetbrains.exposed.v1.core.inList
 import org.jetbrains.exposed.v1.core.inSubQuery
 import org.jetbrains.exposed.v1.core.less
 import org.jetbrains.exposed.v1.core.like
+import org.jetbrains.exposed.v1.core.notInSubQuery
 import org.jetbrains.exposed.v1.jdbc.select
 import org.jetbrains.exposed.v1.jdbc.selectAll
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
@@ -46,6 +50,7 @@ import suwayomi.tachidesk.graphql.server.primitives.maybeSwap
 import suwayomi.tachidesk.graphql.types.MangaNodeList
 import suwayomi.tachidesk.graphql.types.MangaType
 import suwayomi.tachidesk.manga.model.table.CategoryMangaTable
+import suwayomi.tachidesk.manga.model.table.ChapterTable
 import suwayomi.tachidesk.manga.model.table.MangaStatus
 import suwayomi.tachidesk.manga.model.table.MangaTable
 import java.util.concurrent.CompletableFuture
@@ -196,6 +201,10 @@ class MangaQuery {
         val lastFetchedAt: LongFilter? = null,
         val chaptersLastFetchedAt: LongFilter? = null,
         val categoryId: IntFilter? = null,
+        val hasDownloadedChapters: BooleanFilter? = null,
+        val hasUnreadChapters: BooleanFilter? = null,
+        val hasBookmarkedChapters: BooleanFilter? = null,
+        val hasDuplicateChapters: BooleanFilter? = null,
         override val and: List<MangaFilter>? = null,
         override val or: List<MangaFilter>? = null,
         override val not: MangaFilter? = null,
@@ -219,7 +228,48 @@ class MangaQuery {
                 andFilterWithCompare(MangaTable.lastFetchedAt, lastFetchedAt),
                 andFilterWithCompare(MangaTable.chaptersLastFetchedAt, chaptersLastFetchedAt),
                 andFilterWithCompareEntity(CategoryMangaTable.category, categoryId),
+                // Chapter-level filters via subqueries
+                hasDownloadedChapters.toChapterExistsOp { ChapterTable.isDownloaded eq true },
+                hasUnreadChapters.toChapterExistsOp { ChapterTable.isRead eq false },
+                hasBookmarkedChapters.toChapterExistsOp { ChapterTable.isBookmarked eq true },
+                hasDuplicateChapters.toDuplicateExistsOp(),
             )
+
+        companion object {
+            private fun BooleanFilter?.toChapterExistsOp(condition: () -> Op<Boolean>): Op<Boolean>? {
+                val filter = this ?: return null
+                return when (filter.equalTo) {
+                    true -> MangaTable.id.inSubQuery(
+                        ChapterTable.select(ChapterTable.manga).where { condition() },
+                    )
+                    false -> MangaTable.id.notInSubQuery(
+                        ChapterTable.select(ChapterTable.manga).where { condition() },
+                    )
+                    else -> null
+                }
+            }
+
+            private fun BooleanFilter?.toDuplicateExistsOp(): Op<Boolean>? {
+                val filter = this ?: return null
+                return when (filter.equalTo) {
+                    true -> MangaTable.id.inSubQuery(
+                        ChapterTable
+                            .select(ChapterTable.manga)
+                            .where { ChapterTable.chapter_number greaterEq 0f }
+                            .groupBy(ChapterTable.manga, ChapterTable.chapter_number)
+                            .having { ChapterTable.chapter_number.count() greater 1 },
+                    )
+                    false -> MangaTable.id.notInSubQuery(
+                        ChapterTable
+                            .select(ChapterTable.manga)
+                            .where { ChapterTable.chapter_number greaterEq 0f }
+                            .groupBy(ChapterTable.manga, ChapterTable.chapter_number)
+                            .having { ChapterTable.chapter_number.count() greater 1 },
+                    )
+                    else -> null
+                }
+            }
+        }
     }
 
     @RequireAuth
@@ -245,11 +295,17 @@ class MangaQuery {
     ): MangaNodeList {
         val queryResults =
             transaction {
-                val mangaIdsQuery =
+                val needsCategoryJoin = condition?.categoryIds != null || filter?.categoryId != null
+
+                val mangaIdsQuery = if (needsCategoryJoin) {
                     MangaTable
                         .leftJoin(CategoryMangaTable)
                         .select(MangaTable.id)
                         .withDistinct()
+                } else {
+                    MangaTable
+                        .select(MangaTable.id)
+                }
 
                 mangaIdsQuery.applyOps(condition, filter)
 

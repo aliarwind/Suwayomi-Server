@@ -21,6 +21,8 @@ import org.jetbrains.exposed.v1.jdbc.selectAll
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import org.jetbrains.exposed.v1.jdbc.update
 import suwayomi.tachidesk.manga.impl.Manga.getManga
+import suwayomi.tachidesk.manga.impl.download.DownloadManager
+import suwayomi.tachidesk.manga.model.table.ChapterTable
 import suwayomi.tachidesk.manga.model.table.CategoryMangaTable
 import suwayomi.tachidesk.manga.model.table.CategoryTable
 import suwayomi.tachidesk.manga.model.table.MangaTable
@@ -70,6 +72,23 @@ object Library {
                 }
             }.apply {
                 handleMangaThumbnail(mangaId, false)
+            }
+
+            // Clean up downloads: delete downloaded chapters and remove from download queue
+            try {
+                val chapterIds =
+                    transaction {
+                        ChapterTable
+                            .select(ChapterTable.id)
+                            .where { ChapterTable.manga eq mangaId }
+                            .map { it[ChapterTable.id].value }
+                    }
+                if (chapterIds.isNotEmpty()) {
+                    Chapter.deleteChapters(chapterIds)
+                    DownloadManager.dequeue(DownloadManager.EnqueueInput(chapterIds))
+                }
+            } catch (e: Exception) {
+                // Ignore errors during download cleanup — the manga was already removed from library
             }
         }
     }

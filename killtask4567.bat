@@ -1,0 +1,1 @@
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr 4567') do taskkill /F /PID %%a & goto :eof

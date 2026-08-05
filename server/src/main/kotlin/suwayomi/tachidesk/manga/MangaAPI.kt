@@ -19,6 +19,7 @@ import suwayomi.tachidesk.manga.controller.BackupController
 import suwayomi.tachidesk.manga.controller.CategoryController
 import suwayomi.tachidesk.manga.controller.DownloadController
 import suwayomi.tachidesk.manga.controller.ExtensionController
+import suwayomi.tachidesk.manga.controller.MaintenanceController
 import suwayomi.tachidesk.manga.controller.MangaController
 import suwayomi.tachidesk.manga.controller.SourceController
 import suwayomi.tachidesk.manga.controller.TrackController
@@ -145,6 +146,10 @@ object MangaAPI {
             post("bind", TrackController.bind)
             post("update", TrackController.update)
             get("{trackerId}/thumbnail", TrackController.thumbnail)
+        }
+
+        path("maintenance") {
+            post("scan-download-marks", MaintenanceController.scanDownloadMarks)
         }
     }
 }
