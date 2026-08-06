@@ -19,7 +19,7 @@ import suwayomi.tachidesk.server.database.migration.helpers.toSqlName
  * - CHAPTER.IS_DOWNLOADED: download cleanup queries
  */
 @Suppress("ClassName", "unused")
-class M0059_AddPerformanceIndexes : SQLMigration() {
+class M0061_AddPerformanceIndexesV2 : SQLMigration() {
     override val sql: String
         get() {
             // Table names as defined in Exposed table objects

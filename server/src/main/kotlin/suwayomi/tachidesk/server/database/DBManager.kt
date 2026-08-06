@@ -24,6 +24,7 @@ import suwayomi.tachidesk.graphql.types.DatabaseType
 import suwayomi.tachidesk.server.ApplicationDirs
 import suwayomi.tachidesk.server.ServerConfig
 import suwayomi.tachidesk.server.serverConfig
+import suwayomi.tachidesk.server.database.migration.helpers.toSqlName
 import suwayomi.tachidesk.server.util.ExitCode
 import suwayomi.tachidesk.server.util.shutdownApp
 import uy.kohesive.injekt.Injekt
@@ -183,6 +184,45 @@ fun databaseUp(givenDb: Database? = null) {
                         serverConfig.databaseUsername.value.takeIf { it.isNotBlank() },
                     )
                 SchemaUtils.createSchema(schema)
+            }
+        }
+        // Ensure upstream migrations that may have been skipped due to local
+        // migration version conflicts are applied directly.
+        // M0059 (AddJarUrlToExtensionTable): adds jar_url column to extension table.
+        // We delete any stale local M0059 record so it can run on fresh installs,
+        // AND add the column directly for databases where M0060/M0061 already ran.
+        transaction {
+            val conn = TransactionManager.current().connection
+
+            // 1) Delete stale M0059 record (for computers updating from old local version)
+            try {
+                val delStmt =
+                    conn.prepareStatement(
+                        "DELETE FROM suwayomi.${"Migrations".toSqlName()} WHERE version = 59 AND name = 'AddPerformanceIndexes'",
+                        false,
+                    )
+                val deleted = delStmt.executeUpdate()
+                delStmt.closeIfPossible()
+                if (deleted > 0) {
+                    logger.info { "Cleaned up stale M0059 record: $deleted row(s) deleted" }
+                }
+            } catch (e: Exception) {
+                logger.warn(e) { "Failed to clean up stale M0059 record (non-fatal)" }
+            }
+
+            // 2) Ensure jar_url column exists regardless of whether M0059 runs
+            try {
+                val colStmt =
+                    conn.prepareStatement(
+                        "ALTER TABLE suwayomi.${"extension".toSqlName()} ADD COLUMN IF NOT EXISTS ${"jar_url".toSqlName()} VARCHAR(2048) NULL",
+                        false,
+                    )
+                colStmt.executeUpdate()
+                colStmt.closeIfPossible()
+                // Reset Exposed metadata cache so it picks up the new column
+                TransactionManager.current().db.dialectMetadata.resetCaches()
+            } catch (e: Exception) {
+                logger.warn(e) { "Failed to ensure jar_url column (non-fatal)" }
             }
         }
         val migrations = loadMigrationsFrom("suwayomi.tachidesk.server.database.migration", ServerConfig::class.java)

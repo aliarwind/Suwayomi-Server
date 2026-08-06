@@ -136,11 +136,6 @@ object WebInterfaceManager {
     fun getAboutInfo(): AboutWebUI {
         val currentVersion = getLocalVersion()
 
-        val failedToGetVersion = currentVersion == "r-1"
-        if (failedToGetVersion) {
-            throw Exception("Failed to get current version")
-        }
-
         return AboutWebUI(
             channel = serverConfig.webUIChannel.value,
             tag = currentVersion,
@@ -398,6 +393,13 @@ object WebInterfaceManager {
         val log =
             KotlinLogging.logger("${logger.name} doInitialSetup(flavor= ${flavor.uiName})")
 
+        // Bundled channel: never try to download from GitHub, go straight to bundled WebUI
+        if (serverConfig.webUIChannel.value == WebUIChannel.BUNDLED) {
+            log.info { "Channel is BUNDLED, skipping download and using bundled WebUI" }
+            setupBundledWebUI()
+            return
+        }
+
         val isLocalWebUIValid = !isInvalid && isLocalWebUIValid(flavor, applicationDirs.webUIRoot)
 
         /**
@@ -473,6 +475,9 @@ object WebInterfaceManager {
     }
 
     private suspend fun checkForUpdate(flavor: WebUIFlavor) {
+        // Bundled channel: no network check, bundled version is always used
+        if (serverConfig.webUIChannel.value == WebUIChannel.BUNDLED) return
+
         preferences.edit().putLong(LAST_WEBUI_UPDATE_CHECK_KEY, System.currentTimeMillis()).apply()
         val localVersion = getLocalVersion()
 
@@ -522,6 +527,11 @@ object WebInterfaceManager {
     ): Boolean {
         if (!doesLocalWebUIExist(path)) {
             return false
+        }
+
+        // Bundled channel: no remote MD5 to compare against, files exist = valid
+        if (serverConfig.webUIChannel.value == WebUIChannel.BUNDLED) {
+            return true
         }
 
         val log =

@@ -197,12 +197,16 @@ download_components() {
         | cut -d '"' -f 4)
 
     if [ -z "$launcher_url" ]; then
-        log_error "无法获取 Suwayomi-Launcher 下载地址"
+        if [ -f "$BUILD_TOOLS/Suwayomi-Launcher.jar" ]; then
+            log_info "无法获取 Suwayomi-Launcher 下载地址，使用缓存版本"
+        else
+            log_error "无法获取 Suwayomi-Launcher 下载地址且无缓存版本"
+        fi
+    else
+        download_if_missing "$launcher_url" \
+            "$BUILD_TOOLS/Suwayomi-Launcher.jar" \
+            "Suwayomi-Launcher"
     fi
-
-    download_if_missing "$launcher_url" \
-        "$BUILD_TOOLS/Suwayomi-Launcher.jar" \
-        "Suwayomi-Launcher"
 
     # Zulu JRE
     download_if_missing "$JRE_URL" \

@@ -64,7 +64,7 @@ class InfoQuery {
     @RequireAuth
     fun checkForWebUIUpdate(): CompletableFuture<WebUIUpdateCheck> =
         future {
-            val (version, updateAvailable) = WebInterfaceManager.isUpdateAvailable(WebUIFlavor.current, raiseError = true)
+            val (version, updateAvailable) = WebInterfaceManager.isUpdateAvailable(WebUIFlavor.current, raiseError = false)
             WebUIUpdateCheck(
                 channel = serverConfig.webUIChannel.value,
                 tag = version,
