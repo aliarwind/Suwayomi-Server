@@ -153,6 +153,9 @@ build_jar() {
     export JAVA_HOME="$JDK_DIR"
     export PATH="$JAVA_HOME/bin:$PATH"
 
+    # 清理旧 JAR，确保 assemble 只找到本次构建产物
+    rm -f "$SCRIPT_DIR/server/build/"*.jar 2>/dev/null || true
+
     # 如果编译 OOM 可调大这个值
     local HEAP="${GRADLE_HEAP:-4096m}"
 
@@ -271,6 +274,9 @@ assemble() {
     cp "$SCRIPT_DIR/killtask4567.bat" "$DIST_DIR/$RELEASE_NAME/" 2>/dev/null || log_warn "killtask4567.bat 未找到，跳过"
 
     log_info "目录组装完成: $DIST_DIR/$RELEASE_NAME/"
+
+    # 将 RELEASE_NAME 写入临时文件供 package() 使用
+    echo "$RELEASE_NAME" > "$DIST_DIR/.last_release_name"
 }
 
 # ============================================================
@@ -278,12 +284,17 @@ assemble() {
 # ============================================================
 package() {
     local RELEASE_NAME
-    RELEASE_NAME=$(ls -d "$DIST_DIR"/Suwayomi-Server-*-windows-x64 2>/dev/null | head -1 | xargs basename)
-    if [ -z "$RELEASE_NAME" ]; then
-        log_error "找不到发布目录"
+    if [ -f "$DIST_DIR/.last_release_name" ]; then
+        RELEASE_NAME=$(cat "$DIST_DIR/.last_release_name")
+        log_info "打包 $RELEASE_NAME.zip ..."
+    else
+        # 兼容旧行为：如果没有临时文件，回退到自动发现
+        RELEASE_NAME=$(ls -d "$DIST_DIR"/Suwayomi-Server-*-windows-x64 2>/dev/null | head -1 | xargs basename)
+        if [ -z "$RELEASE_NAME" ]; then
+            log_error "找不到发布目录"
+        fi
+        log_info "打包 $RELEASE_NAME.zip (auto-detected)..."
     fi
-
-    log_info "打包 $RELEASE_NAME.zip ..."
     cd "$DIST_DIR"
     rm -f "${RELEASE_NAME}.zip"
     zip -9 -r "${RELEASE_NAME}.zip" "$RELEASE_NAME/" > /dev/null

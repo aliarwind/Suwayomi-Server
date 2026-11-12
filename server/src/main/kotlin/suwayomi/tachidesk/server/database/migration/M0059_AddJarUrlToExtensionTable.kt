@@ -7,13 +7,14 @@ package suwayomi.tachidesk.server.database.migration
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-import de.neonew.exposed.migrations.helpers.AddColumnMigration
+import de.neonew.exposed.migrations.helpers.SQLMigration
+import suwayomi.tachidesk.server.database.migration.helpers.toSqlName
 
 @Suppress("ClassName", "unused")
-class M0059_AddJarUrlToExtensionTable :
-    AddColumnMigration(
-        "extension",
-        "jar_url",
-        "VARCHAR(2048)",
-        "NULL",
-    )
+class M0059_AddJarUrlToExtensionTable : SQLMigration() {
+    override val sql: String
+        get() =
+            """
+            ALTER TABLE ${"extension".toSqlName()} ADD COLUMN IF NOT EXISTS ${"jar_url".toSqlName()} VARCHAR(2048) DEFAULT NULL;
+            """.trimIndent()
+}

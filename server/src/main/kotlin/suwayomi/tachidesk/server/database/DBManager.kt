@@ -189,28 +189,30 @@ fun databaseUp(givenDb: Database? = null) {
         // Ensure upstream migrations that may have been skipped due to local
         // migration version conflicts are applied directly.
         // M0059 (AddJarUrlToExtensionTable): adds jar_url column to extension table.
-        // We delete any stale local M0059 record so it can run on fresh installs,
-        // AND add the column directly for databases where M0060/M0061 already ran.
+        // We rename any stale local M0059 record (old name: AddPerformanceIndexes)
+        // to the current name so runMigrations sees it as already applied.
+        // The manual ADD COLUMN IF NOT EXISTS is always safe: M0059 itself now also
+        // uses IF NOT EXISTS, so both paths are idempotent.
         transaction {
             val conn = TransactionManager.current().connection
 
-            // 1) Delete stale M0059 record (for computers updating from old local version)
+            // 1) Rename stale M0059 record so runMigrations skips it
             try {
-                val delStmt =
+                val updStmt =
                     conn.prepareStatement(
-                        "DELETE FROM suwayomi.${"Migrations".toSqlName()} WHERE version = 59 AND name = 'AddPerformanceIndexes'",
+                        "UPDATE suwayomi.${"Migrations".toSqlName()} SET name = 'AddJarUrlToExtensionTable' WHERE version = 59 AND name = 'AddPerformanceIndexes'",
                         false,
                     )
-                val deleted = delStmt.executeUpdate()
-                delStmt.closeIfPossible()
-                if (deleted > 0) {
-                    logger.info { "Cleaned up stale M0059 record: $deleted row(s) deleted" }
+                val updated = updStmt.executeUpdate()
+                updStmt.closeIfPossible()
+                if (updated > 0) {
+                    logger.info { "Renamed stale M0059 record: $updated row(s) updated" }
                 }
             } catch (e: Exception) {
-                logger.warn(e) { "Failed to clean up stale M0059 record (non-fatal)" }
+                logger.warn(e) { "Failed to rename stale M0059 record (non-fatal)" }
             }
 
-            // 2) Ensure jar_url column exists regardless of whether M0059 runs
+            // 2) Ensure jar_url column exists (idempotent — uses IF NOT EXISTS)
             try {
                 val colStmt =
                     conn.prepareStatement(
