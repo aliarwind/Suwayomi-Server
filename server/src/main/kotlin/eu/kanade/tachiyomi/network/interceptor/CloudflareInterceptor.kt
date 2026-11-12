@@ -16,7 +16,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.Cookie
-import okhttp3.FormBody
+import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
@@ -26,6 +26,7 @@ import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import okio.Buffer
 import suwayomi.tachidesk.server.serverConfig
+import suwayomi.tachidesk.server.util.buildSocksProxyUrl
 import uy.kohesive.injekt.injectLazy
 import java.io.IOException
 import java.util.concurrent.CompletableFuture
@@ -261,6 +262,11 @@ object CFClearance {
     )
 
     @Serializable
+    data class FlareSolverProxy(
+        val url: String,
+    )
+
+    @Serializable
     data class FlareSolverRequest(
         val cmd: String,
         val url: String,
@@ -270,9 +276,12 @@ object CFClearance {
         val sessionTtlMinutes: Int? = null,
         val cookies: List<FlareSolverCookie>? = null,
         val returnOnlyCookies: Boolean? = null,
-        val proxy: String? = null,
+        val proxy: FlareSolverProxy? = null,
         val postData: String? = null, // only used with cmd 'request.post'
     )
+
+    internal fun FlareSolverRequest.withRequestProxy(proxyUrl: String?): FlareSolverRequest =
+        proxyUrl?.let { copy(session = null, sessionTtlMinutes = null, proxy = FlareSolverProxy(it)) } ?: this
 
     @Serializable
     data class FlareSolverSolutionCookie(
@@ -313,12 +322,15 @@ object CFClearance {
         onlyCookies: Boolean,
     ): FlareSolverResponse {
         val timeout = serverConfig.flareSolverrTimeout.value.seconds
+        val socksProxy = buildSocksProxyUrl()
+
         return with(json) {
             mutex.withLock {
                 client.value
                     .newCall(
                         POST(
                             url = serverConfig.flareSolverrUrl.value.removeSuffix("/") + "/v1",
+                            headers = socksProxy?.let { Headers.headersOf("X-Proxy-Server", it) } ?: Headers.headersOf(),
                             body =
                                 Json
                                     .encodeToString(
@@ -338,21 +350,16 @@ object CFClearance {
                                             maxTimeout = timeout.inWholeMilliseconds.toInt(),
                                             postData =
                                                 if (originalRequest.method == "POST") {
-                                                    when (val body = originalRequest.body) {
-                                                        is FormBody -> {
+                                                    originalRequest.body
+                                                        ?.let { body ->
                                                             Buffer()
                                                                 .also { body.writeTo(it) }
                                                                 .readUtf8()
-                                                        }
-
-                                                        else -> {
-                                                            ""
-                                                        }
-                                                    }
+                                                        }.orEmpty()
                                                 } else {
                                                     null
                                                 },
-                                        ),
+                                        ).withRequestProxy(socksProxy),
                                     ).toRequestBody(jsonMediaType),
                         ),
                     ).awaitSuccess()
@@ -366,7 +373,10 @@ object CFClearance {
         setUserAgent: (String) -> Unit,
         originalRequest: Request,
     ): Request {
-        if (flareSolverResponse.solution.status in 200..299) {
+        if (flareSolverResponse.solution.cookies.none { it.name in CloudflareInterceptor.COOKIE_NAMES }) {
+            logger.debug { "Cloudflare challenge failed to resolve" }
+            throw CloudflareBypassException()
+        } else {
             setUserAgent(flareSolverResponse.solution.userAgent)
             val cookies =
                 flareSolverResponse.solution.cookies
@@ -406,9 +416,6 @@ object CFClearance {
                 request = originalRequest,
                 userAgent = flareSolverResponse.solution.userAgent,
             )
-        } else {
-            logger.debug { "Cloudflare challenge failed to resolve" }
-            throw CloudflareBypassException()
         }
     }
 

@@ -14,20 +14,17 @@ import org.cef.browser.CefBrowser
 import org.cef.browser.CefFrame
 import org.cef.browser.CefRendering
 import org.cef.handler.CefDisplayHandlerAdapter
+import org.cef.handler.CefLifeSpanHandlerAdapter
 import org.cef.handler.CefLoadHandler
 import org.cef.handler.CefLoadHandlerAdapter
 import org.cef.handler.CefRenderHandlerAdapter
-import org.cef.handler.CefRequestHandlerAdapter
-import org.cef.handler.CefResourceRequestHandler
 import org.cef.input.CefTouchEvent
-import org.cef.misc.BoolRef
 import org.cef.network.CefCookie
 import org.cef.network.CefCookieManager
-import org.cef.network.CefRequest
 import uy.kohesive.injekt.injectLazy
 import xyz.nulldev.androidcompat.webkit.CefHelper
 import xyz.nulldev.androidcompat.webkit.dispose
-import xyz.nulldev.androidcompat.webkit.evaluateJavaScript
+import xyz.nulldev.androidcompat.webkit.evaluateJavaScriptDecoded
 import java.awt.Component
 import java.awt.HeadlessException
 import java.awt.Rectangle
@@ -125,6 +122,25 @@ class KcefWebView {
         val content: String,
     ) : Event()
 
+    private inner class LifeSpanHandler : CefLifeSpanHandlerAdapter() {
+        override fun onAfterCreated(browser: CefBrowser) {
+            val ua = System.getProperty("http.agent")
+            logger.debug { "Setting user agent $ua" }
+            val args = """
+            {
+                "userAgent": ${Json.encodeToString(ua)}
+            }
+            """
+            browser.devToolsClient.executeDevToolsMethod("Emulation.setUserAgentOverride", args).whenComplete { res, ex ->
+                if (ex != null) {
+                    logger.error(ex) { "Failed to set user agent" }
+                } else {
+                    logger.debug { "Successfully set user agent: $res" }
+                }
+            }
+        }
+    }
+
     private inner class DisplayHandler : CefDisplayHandlerAdapter() {
         override fun onConsoleMessage(
             browser: CefBrowser,
@@ -148,7 +164,7 @@ class KcefWebView {
             url: String,
         ) {
             if (!frame.isMain) return
-            this@KcefWebView.browser!!.evaluateJavaScript("return document.title") {
+            this@KcefWebView.browser!!.evaluateJavaScriptDecoded("document.title") {
                 WebView.notifyAllClients(
                     Json.encodeToString<Event>(
                         AddressEvent(url, it ?: ""),
@@ -189,21 +205,6 @@ class KcefWebView {
             failedUrl: String,
         ) {
             if (frame.isMain) handleLoad(failedUrl, 0, errorText)
-        }
-    }
-
-    private inner class RequestHandler : CefRequestHandlerAdapter() {
-        override fun getResourceRequestHandler(
-            browser: CefBrowser,
-            frame: CefFrame,
-            request: CefRequest,
-            isNavigation: Boolean,
-            isDownload: Boolean,
-            requestInitiator: String,
-            disableDefaultHandling: BoolRef,
-        ): CefResourceRequestHandler? {
-            logger.trace { "Load resource: ${frame.name} - ${request.url}" }
-            return null
         }
     }
 
@@ -252,9 +253,9 @@ class KcefWebView {
         kcefClient =
             runBlocking {
                 CefHelper.createClient().apply {
+                    addLifeSpanHandler(LifeSpanHandler())
                     addDisplayHandler(DisplayHandler())
                     addLoadHandler(LoadHandler())
-                    addRequestHandler(RequestHandler())
                 }
             }
 
@@ -279,7 +280,6 @@ class KcefWebView {
 
     fun destroy() {
         flush()
-        browser?.close(true)
         browser?.dispose()
         browser = null
         kcefClient?.dispose()
@@ -287,7 +287,6 @@ class KcefWebView {
     }
 
     fun loadUrl(url: String) {
-        browser?.close(true)
         browser?.dispose()
         browser =
             kcefClient!!
@@ -727,7 +726,7 @@ class KcefWebView {
         status: Int = 0,
         error: String? = null,
     ) {
-        browser!!.evaluateJavaScript("return document.title") {
+        browser!!.evaluateJavaScriptDecoded("document.title") {
             logger.trace { "Load finished with title $it" }
             WebView.notifyAllClients(
                 Json.encodeToString<Event>(
