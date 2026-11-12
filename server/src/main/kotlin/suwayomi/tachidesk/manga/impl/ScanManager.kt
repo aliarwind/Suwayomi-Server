@@ -16,12 +16,15 @@ import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.launch
 import org.jetbrains.exposed.v1.core.SortOrder
 import org.jetbrains.exposed.v1.core.eq
+import org.jetbrains.exposed.v1.core.inSubQuery
+import org.jetbrains.exposed.v1.jdbc.select
 import org.jetbrains.exposed.v1.jdbc.selectAll
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import suwayomi.tachidesk.manga.impl.chapter.updateChapterPersistence
 import suwayomi.tachidesk.manga.impl.util.getMangaDownloadDir
 import suwayomi.tachidesk.manga.model.table.ChapterTable
 import suwayomi.tachidesk.manga.model.table.MangaTable
+import suwayomi.tachidesk.manga.model.table.MangaUserTable
 import xyz.nulldev.androidcompat.util.SafePath
 import java.io.File
 
@@ -161,7 +164,13 @@ object ScanManager {
             transaction {
                 MangaTable
                     .selectAll()
-                    .where { MangaTable.inLibrary eq true }
+                    .where {
+                        MangaTable.id.inSubQuery(
+                            MangaUserTable
+                                .select(MangaUserTable.manga)
+                                .where { MangaUserTable.inLibrary eq true },
+                        )
+                    }
                     .map { row ->
                         Pair(row[MangaTable.id].value, row[MangaTable.title])
                     }
@@ -217,7 +226,6 @@ object ScanManager {
                                 scanlator = row[ChapterTable.scanlator],
                                 isDownloaded = row[ChapterTable.isDownloaded],
                                 pageCount = row[ChapterTable.pageCount],
-                                lastPageRead = row[ChapterTable.lastPageRead],
                             )
                         }
                 }
@@ -294,7 +302,6 @@ object ScanManager {
                             isMarkedAsDownloaded = chapter.isDownloaded,
                             dbPageCount = chapter.pageCount,
                             downloadPageCount = downloadPageCount,
-                            lastPageRead = chapter.lastPageRead,
                             logger = logger,
                         )
 
@@ -361,7 +368,6 @@ object ScanManager {
         val scanlator: String?,
         val isDownloaded: Boolean,
         val pageCount: Int,
-        val lastPageRead: Int,
     )
 
     // endregion

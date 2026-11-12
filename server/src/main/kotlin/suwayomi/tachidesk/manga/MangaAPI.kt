@@ -10,6 +10,7 @@ package suwayomi.tachidesk.manga
 import io.javalin.apibuilder.ApiBuilder.get
 import io.javalin.apibuilder.ApiBuilder.head
 import io.javalin.apibuilder.ApiBuilder.path
+import io.javalin.apibuilder.ApiBuilder.post
 import suwayomi.tachidesk.manga.controller.ExtensionController
 import suwayomi.tachidesk.manga.controller.MaintenanceController
 import suwayomi.tachidesk.manga.controller.MangaController

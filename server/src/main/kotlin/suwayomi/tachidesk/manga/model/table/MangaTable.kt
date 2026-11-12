@@ -44,10 +44,6 @@ object MangaTable : IntIdTable() {
     val updateStrategy = varchar("update_strategy", 256).default(UpdateStrategy.ALWAYS_UPDATE.name)
 
     val memo = jsonObject("memo")
-
-    init {
-        index(false, inLibrary)
-    }
 }
 
 fun MangaTable.toDataClass(mangaEntry: ResultRow) =

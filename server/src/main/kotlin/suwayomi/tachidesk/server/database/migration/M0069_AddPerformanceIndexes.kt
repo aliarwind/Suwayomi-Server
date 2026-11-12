@@ -12,18 +12,18 @@ import suwayomi.tachidesk.server.database.migration.helpers.toSqlName
 
 /**
  * Adds performance indexes for large libraries (20k+ manga):
- * - MANGA.IN_LIBRARY: library manga queries / COUNT
+ * - MANGA_USER.IN_LIBRARY: library manga queries / COUNT
  * - CATEGORY_MANGA.CATEGORY: category-based manga listing
  * - CATEGORY_MANGA.MANGA: manga-category JOINs
  * - CHAPTER.MANGA: chapter queries by manga (download cleanup)
  * - CHAPTER.IS_DOWNLOADED: download cleanup queries
  */
 @Suppress("ClassName", "unused")
-class M0061_AddPerformanceIndexesV2 : SQLMigration() {
+class M0069_AddPerformanceIndexes : SQLMigration() {
     override val sql: String
         get() {
             // Table names as defined in Exposed table objects
-            val mangaTable = "Manga".toSqlName()
+            val mangaUserTable = "MangaUser".toSqlName()
             val categoryMangaTable = "CategoryManga".toSqlName()
             val chapterTable = "Chapter".toSqlName()
 
@@ -34,7 +34,7 @@ class M0061_AddPerformanceIndexesV2 : SQLMigration() {
             val isDownloadedCol = "is_downloaded".toSqlName()
 
             return """
-                CREATE INDEX IF NOT EXISTS MANGA_IN_LIBRARY_IDX ON $mangaTable($inLibraryCol);
+                CREATE INDEX IF NOT EXISTS MANGA_USER_IN_LIBRARY_IDX ON $mangaUserTable($inLibraryCol);
                 CREATE INDEX IF NOT EXISTS CATEGORY_MANGA_CATEGORY_IDX ON $categoryMangaTable($categoryCol);
                 CREATE INDEX IF NOT EXISTS CATEGORY_MANGA_MANGA_IDX ON $categoryMangaTable($mangaRefCol);
                 CREATE INDEX IF NOT EXISTS CHAPTER_MANGA_IDX ON $chapterTable($mangaRefCol);

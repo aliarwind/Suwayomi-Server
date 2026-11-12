@@ -105,8 +105,10 @@ object Library {
                             .map { it[ChapterTable.id].value }
                     }
                 if (chapterIds.isNotEmpty()) {
-                    Chapter.deleteChapters(chapterIds)
-                    DownloadManager.dequeue(DownloadManager.EnqueueInput(chapterIds))
+                    DownloadManager.dequeue(userId, chapterIds)
+                    scope.launch {
+                        Chapter.deleteDownloadedChapters(userId, chapterIds)
+                    }
                 }
             } catch (e: Exception) {
                 // Ignore errors during download cleanup — the manga was already removed from library

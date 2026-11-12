@@ -5,8 +5,8 @@
 **Suwayomi-Server** — 一个免费开源的漫画阅读器服务器，可运行 Mihon (Tachiyomi) 的扩展。提供 GraphQL API，配合 WebUI 前端使用。多平台支持（Windows / Linux / macOS / Docker）。
 
 - **上游仓库**: [Suwayomi/Suwayomi-Server](https://github.com/Suwayomi/Suwayomi-Server)
-- **技术栈**: Kotlin 2.4.0 + Javalin (HTTP) + Exposed (ORM) + GraphQL Kotlin + JTE 模板
-- **构建系统**: Gradle 9.5.1 + ShadowJar (fat JAR)
+- **技术栈**: Kotlin 2.4.21 + Javalin 7.2.4 (HTTP) + Exposed 1.4.0 (ORM) + GraphQL Kotlin + JTE 模板
+- **构建系统**: Gradle 9.8.2 + ShadowJar (fat JAR)
 - **JVM 目标**: JDK 21+
 - **CI**: GitHub Actions，打包发布各平台 bundle
 
@@ -41,7 +41,7 @@ Suwayomi-Server/
 - **API**: 主接口 GraphQL (`/api/graphql`)，REST (`/api/v1`) 即将废弃
 - **数据库**: H2 (默认) / PostgreSQL (可选)，通过 Exposed ORM 访问
 - **扩展系统**: 加载 Mihon APK 扩展（通过 AndroidCompat 兼容层）
-- **前端**: WebUI 作为 ZIP 资源内置在 JAR 中（构建时从 GitHub Release 下载）
+- **前端**: WebUI 作为 `WebUI.zip` 资源内置在 JAR 中（本 fork 从 `../Suwayomi-WebUI` 本地构建，`webUIRevisionTag = "r99999"`，不走 GitHub Release 下载）
 - **桌面模式**: 内嵌 JCEF/Electron WebView
 - **同步**: 支持 SyncYomi 协议与 Mihon/Neko 客户端同步
 
@@ -91,26 +91,32 @@ export GRADLE_HEAP=5120m
 ### build-release.sh 工作流
 
 ```
-check_env → download_components → build_jar → assemble → package
-                                          ↓
-                              Suwayomi-Launcher.jar (GitHub API)
+check_env → download_components → build_webui → build_jar → assemble → package
+                                     ↓
+                          ../Suwayomi-WebUI 构建 → WebUI.zip
+                                     ↓
+                              Suwayomi-Launcher.jar (GitHub latest release)
                               Zulu JRE 25.0.3 (cdn.azul.com)
                               Electron v37.2.5 (GitHub)
 ```
 
+注意：`download_if_missing()` 只要 `build-tools/` 里已有文件就跳过下载。启动器版本过旧会导致启动崩溃（`Invalid path 'autoDownloadNewChapters'`），升级时先 `rm build-tools/Suwayomi-Launcher.jar`。
+
 产物输出到 `dist/`:
 - `dist/Suwayomi-Server-vX.X.X-windows-x64/` — 可执行目录
-- `dist/Suwayomi-Server-vX.X.X-windows-x64.zip` — 发布包
+- `dist/Suwayomi-Server-vX.X.X-windows-x64.zip` — 发布包（当前版本 v2.4.2495）
+
+版本号 = `v2.4.<git commit count>`（见 `buildSrc/src/main/kotlin/Constants.kt`），每次提交都会变化。
 
 ### 依赖缓存
 
-首次运行下载 ~200MB（JDK 21 / JRE 25 / Electron），后续运行命中 `build-tools/` 缓存，仅增量编译。
+首次运行下载 ~200MB（JRE 25 / Electron；JDK 21 已内置在 `build-tools/` 中），后续运行命中 `build-tools/` 缓存，仅增量编译。
 
 ## Key Configuration
 
-- **版本号**: 由 Git tag 自动生成（`getTachideskVersion()`）
+- **版本号**: `v2.4.<git commit count>`（`getTachideskVersion()`，基于提交数而非 tag，每次提交都会变）
 - **构建类型**: `Preview`（push） / `Stable`（tag），通过 `ProductBuildType` 环境变量控制
-- **WebUI 版本**: `webUIRevisionTag` 在构建脚本中定义
+- **WebUI 版本**: `webUIRevisionTag = "r99999"`，固定为本地构建版本，总是覆盖缓存
 - **主类**: `suwayomi.tachidesk.MainKt`
 
 ## Module Graph
@@ -140,4 +146,7 @@ AndroidCompat
 3. **配置模型**: 服务器配置定义在 `server/src/main/kotlin/suwayomi/tachidesk/server/ServerConfig.kt`，通过类型安全配置读取
 4. **GraphQL 入口**: `TachideskGraphQLServer.kt` 是 GraphQL 引擎初始化点
 5. **不要直接运行 bundler.sh**: 该脚本是 CI Linux 环境专用，Windows 下用 `build-release.sh`
-6. **WebUI 更新**: 修改 `webUIRevisionTag` 并运行 `downloadWebUI` 任务即可切换 WebUI 版本
+6. **WebUI 更新**: 本 fork 从 `../Suwayomi-WebUI` 本地构建，`build-release.sh` 每次都会重建 `WebUI.zip`；服务器缓存目录 `~/AppData/Local/Suwayomi/webUI` 需要时可手动删除
+7. **迁移编号**: `server/.../database/migration/` 现有 M0001–M0070，**必须连续且只能追加**。迁移框架只按版本号判断是否执行、不比较类名，复用/改号会导致上游迁移被永久跳过（历史上的 M0061 就是这样丢的，由 M0070 补偿）
+8. **启动器缓存**: `build-tools/Suwayomi-Launcher.jar` 存在就不会重新下载；上游改配置项后旧启动器会崩溃，升级时先删除该文件
+9. **本地数据库**: 实际运行在 Docker `suwayomi-postgres`（PostgreSQL 17，库 `suwayomi_db`，schema `suwayomi`）；跑迁移前先 `pg_dump` 备份到 `../db-backups/`

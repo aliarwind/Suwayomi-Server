@@ -27,18 +27,20 @@ cd Suwayomi-Server && bash build-release.sh
 1. **build_webui()** — Always runs. Builds WebUI from `../Suwayomi-WebUI/` local repo:
    - Auto-detects new/changed `.tsx` files (newer than `en.po`) → runs `npx lingui extract --clean` to update all locale PO files
    - Runs `pnpm run build` (Vite production build)
-   - Packages `build/` into `server/src/main/resources/WebUI.zip` via ant zip
-2. **build_jar()** — Runs Gradle `:server:shadowJar` (fat JAR, ~166MB)
-3. **assemble** — Copies JAR + Zulu JRE 25 + Electron + launcher scripts → `dist/Suwayomi-Server-vX.X.X-windows-x64/`
+   - Packages `build/` into `server/src/main/resources/WebUI.zip`（构建时写入 `revision` 文件内容 `r99999`）
+2. **build_jar()** — Runs Gradle `:server:shadowJar` (fat JAR, ~180MB)
+3. **assemble** — Copies JAR + Zulu JRE 25.0.3 + Electron v37.2.5 + `Suwayomi-Launcher.jar` + 启动脚本 → `dist/Suwayomi-Server-vX.X.X-windows-x64/`
 4. **package** — Zips the directory
 
-Output: `dist/Suwayomi-Server-v2.3.2240-windows-x64.zip` (~341MB).
+Output: `dist/Suwayomi-Server-v2.4.2495-windows-x64.zip`（370,303,982 B ≈ 353 MiB）。
+
+版本号来自 `getTachideskVersion() = "v2.4.<git commit count>"`，所以每次提交后版本号都会变化；`dist/` 会同时保留历史版本的 zip 和目录。
 
 ### Build flags
 
 | Flag | Effect |
 |------|--------|
-| `--skip-gradle` | Skip Gradle compilation, just repackage (useful when only WebUI changed) |
+| `--skip-gradle` | 跳过 Gradle 编译，复用 `server/build/*.jar` 重新组装（WebUI 仍会重建；找不到 jar 时自动回退到完整编译） |
 | `--clean` | Clear `build-tools/` cache and `dist/` before rebuilding |
 
 ### Prerequisites
@@ -55,22 +57,80 @@ Output: `dist/Suwayomi-Server-v2.3.2240-windows-x64.zip` (~341MB).
 rm -rf ~/AppData/Local/Suwayomi/webUI
 ```
 
+## 本地运行环境（开发机）
+
+### 数据库
+
+开发机实际跑的是 Docker 里的 PostgreSQL 17（H2 只是上游默认值）：
+
+- 容器：`suwayomi-postgres`（镜像 `postgres:17`），端口 5432
+- 库：`suwayomi_db`，schema：`suwayomi`，用户/密码：`postgres` / `postgres`
+- 配置文件：`%LOCALAPPDATA%\Tachidesk\server.conf`（首次启动由启动器生成/合并）
+
+查看迁移状态（注意 PG 下表名是小写未加引号的）：
+
+```bash
+docker exec -i suwayomi-postgres psql -U postgres -d suwayomi_db \
+  -c "SELECT * FROM suwayomi.migrations ORDER BY version;"
+```
+
+在 PowerShell 里不要写成 `suwayomi."Migrations"`——未加引号的小写名才匹配，否则会报 `unterminated quoted identifier`。
+
+### 数据库备份 / 恢复（跑迁移或升级前必做）
+
+备份放在仓库外的 `../db-backups/`：
+
+```bash
+# custom 格式（推荐，可选择性恢复）
+docker exec suwayomi-postgres pg_dump -U postgres -d suwayomi_db -Fc \
+  > ../db-backups/suwayomi_db_$(date +%F).dump
+
+# 纯 SQL（可读、可 grep）
+docker exec suwayomi-postgres pg_dump -U postgres -d suwayomi_db \
+  | gzip > ../db-backups/suwayomi_db_$(date +%F).sql.gz
+
+# 校验：TOC 应包含全部 TABLE DATA；gzip 应无损坏
+pg_restore -l ../db-backups/xxx.dump | head
+gzip -t ../db-backups/xxx.sql.gz
+
+# 恢复
+docker exec -i suwayomi-postgres pg_restore -U postgres -d suwayomi_db \
+  --clean --if-exists < ../db-backups/xxx.dump
+```
+
+### 停止正在运行的服务
+
+```bash
+netstat -ano | findstr :4567      # 找到 PID
+taskkill /PID <pid> /F
+# 或直接运行 dist 目录里的 killtask4567.bat
+```
+
+## 上游合并与本地差异（2026-11）
+
+- 合并点：`develop` 分支上的 commit `074019a34`（Merge upstream/Suwayomi-Server master）
+- 上游 2.4.x 的关键变化：
+  - 多用户支持：`MangaUserTable`（inLibrary / inLibraryAt）与 `ChapterUserTable`（章节已读等按用户存储），M0066 负责建表+回填+删除旧列
+  - 删除了大量旧配置项：`autoDownload*`、`exclude*`、`opds*`、`syncYomi*`、`koreaderSync*` —— 旧版启动器读这些 key 会直接崩溃，必须用 release 235+
+- 本地新增的迁移：`M0069_AddPerformanceIndexes`、`M0070_AddForeignKeyIndexes`（见下方迁移章节）
+- 合并后每次都要检查：① 迁移编号连续（M0001..MN 无缺号）；② `server-reference.conf` 的 key 与启动器版本匹配；③ WebUI 仍从 `../Suwayomi-WebUI` 本地构建，`webUIRevisionTag` 保持 `r99999`
+
 ## Tech Stack
 
 ### Backend (Suwayomi-Server)
-- **Language**: Kotlin 2.4.0, targets JVM 21
-- **HTTP**: Javalin (port 4567)
+- **Language**: Kotlin 2.4.21, targets JVM 21
+- **HTTP**: Javalin 7.2.4 (port 4567)
 - **API**: GraphQL at `/api/graphql` (primary); REST `/api/v1` (deprecated)
-- **ORM**: Exposed v1 (Kotlin DSL for SQL)
-- **DB**: H2 (default, file-based) or PostgreSQL
-- **Build**: Gradle 9.5.1 + ShadowJar
-- **Migrations**: Numbered classes in `server/.../database/migration/` (M0001 through M0061), auto-run on startup
+- **ORM**: Exposed v1.4.0 (Kotlin DSL for SQL)
+- **DB**: H2 (default, file-based) or PostgreSQL（本项目实际使用 PG）
+- **Build**: Gradle 9.8.2 + ShadowJar
+- **Migrations**: Numbered classes in `server/.../database/migration/` (M0001 through M0070), auto-run on startup
 - **Extensions**: Loads Mihon APK extensions via AndroidCompat compatibility layer
 
 ### Frontend (Suwayomi-WebUI)
 - **Language**: TypeScript 6 + React 19
-- **UI**: MUI v6/v9 + Emotion CSS-in-JS (`sx` prop)
-- **Build**: Vite 8
+- **UI**: MUI 9.3.1 + Emotion CSS-in-JS (`sx` prop)
+- **Build**: Vite 8.0.14
 - **Package manager**: pnpm 11
 - **State/Data**: Apollo Client 4.2 (GraphQL cache + network)
 - **i18n**: Lingui v6 with `@lingui/react/macro` (compile-time `t` macro via SWC plugin)
@@ -96,12 +156,14 @@ server/src/main/kotlin/suwayomi/tachidesk/
 ├── manga/
 │   ├── impl/Library.kt                        # Library business logic
 │   ├── model/table/                           # Exposed ORM table definitions
-│   │   ├── MangaTable.kt                      # Manga table (index on inLibrary)
+│   │   ├── MangaTable.kt                      # Manga table
+│   │   ├── MangaUserTable.kt                  # Per-user manga state (inLibrary, inLibraryAt)
 │   │   ├── ChapterTable.kt                    # Chapter table (indexes on manga, isDownloaded)
 │   │   └── CategoryMangaTable.kt              # Join table (indexes on category, manga)
 │   └── model/dataclass/                       # Data classes
 └── server/database/migration/
-    └── M0061_AddPerformanceIndexes.kt         # Performance indexes for 20k+ manga libraries
+    ├── M0069_AddPerformanceIndexes.kt         # Performance indexes for 20k+ manga libraries
+    └── M0070_AddForeignKeyIndexes.kt          # Upstream M0061 FK indexes (skipped DBs only)
 ```
 
 ### Frontend key paths
@@ -182,7 +244,7 @@ In `MangaQuery.kt`:
 2. `applyOps(condition, filter)` → WHERE clauses
 3. `MangaTable.selectAll().where { id inSubQuery mangaIdsQuery }` → main query
 4. Apply ORDER BY
-5. **`res.count()`** → totalCount (before LIMIT, uses `inLibrary` index from M0061)
+5. **`res.count()`** → totalCount (before LIMIT, uses `inLibrary` index from M0069)
 6. Apply `limit(first).offset(offset)`
 7. Return results + totalCount + pageInfo
 
@@ -196,7 +258,7 @@ In `MangaQuery.kt`:
 | **Paginated library mode** | — | `PaginatedLibraryView.tsx` + `PaginationControls.tsx` |
 | **Jump-to-page** | — | Editable page number input in PaginationControls |
 | **Server-side search for paginated view** | — | Multi-field OR filter (title/author/artist/description/genre) |
-| **Performance indexes (M0061)** | 5 indexes: inLibrary, category, manga, isDownloaded | — |
+| **Performance indexes (M0069 + M0070)** | 12 个索引：inLibrary(MangaUser)、category、manga、chapter、isDownloaded，以及上游 M0061 的 7 个外键索引（M0070 补偿） | — |
 | **Category 0 pagination fix** | — | `RequestManager.ts` useGetCategoryMangas() |
 | **i18n for custom features** | — | Chinese translations in `zh-Hans.po` |
 
@@ -211,11 +273,18 @@ In `MangaQuery.kt`:
 
 ## Database Migrations
 
-Migrations are in `server/.../database/migration/`, numbered M0001–M0061. They extend `SQLMigration` and run sequentially on startup.
+Migrations are in `server/.../database/migration/`, numbered M0001–M0070. They extend `SQLMigration` and run sequentially on startup.
+
+### 迁移框架的两个坑（必读）
+
+1. **只比较版本号，不比较类名。** `de.neonew.exposed.migrations` 用类名解析出版本号（`^M(\d+)_?(.*)$`），执行判断是 `migration.version > currentVersion`，记录表里存了 name 但从不比对。所以如果数据库里某个版本号已被本地迁移占用，上游同名/同号的迁移会被永久跳过。2026-11 合并时就是这样：本地旧迁移 `M0061_AddPerformanceIndexesV2` 占了 61 号，上游 `M0061_CreateForeignKeyIndexes` 的 10 个索引从未执行。补偿方式是新增 `M0070_AddForeignKeyIndexes`（带 `IF NOT EXISTS`，在真跑过 M0061 的库上是 no-op）。**以后新增迁移只能追加在末尾，不要复用/改号旧版本。**
+2. **版本号必须连续。** `checkVersions()` 要求加载到的迁移版本是 1..N 连续，缺号会导致启动失败。
+
+另外 `DBManager.kt` 对 M0059 有一段历史修正：把记录里旧名字 `AddPerformanceIndexes` 改写为 `AddJarUrlToExtensionTable`，并手动执行 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS jar_url`。改迁移相关代码时不要删掉它。
 
 To add a new migration:
 ```kotlin
-class M0062_YourMigration : SQLMigration() {
+class M0071_YourMigration : SQLMigration() {
     override val sql: String
         get() {
             val tableName = "TableName".toSqlName()
@@ -246,6 +315,32 @@ The `t` macro compiles to message IDs at build time. If PO files don't have the 
 export GRADLE_HEAP=5120m
 ./gradlew :server:shadowJar -Dorg.gradle.jvmargs="-Xmx5120m" --no-daemon
 ```
+
+### 启动器报 `Invalid path 'autoDownloadNewChapters'`
+`build-tools/Suwayomi-Launcher.jar` 是旧版，仍在读上游已删除的配置项（autoDownload\*、exclude\*、opds\* 等）。`download_if_missing()` 只要文件存在就跳过下载，所以会一直复用旧缓存。修复：
+
+```bash
+rm -f build-tools/Suwayomi-Launcher.jar
+bash build-release.sh          # 重新拉取 latest release 并组装
+```
+
+已验证可用：release 235（`Suwayomi-Launcher.jar` = 16,893,862 B，2026-10-08）。
+
+### 发布包校验（打包后必做）
+```bash
+cd dist
+unzip -l Suwayomi-Server-vX-windows-x64.zip \
+  | grep -E "bin/Suwayomi-Server.jar|Suwayomi-Launcher.jar|Suwayomi Launcher.bat"
+
+# jar 校验：本地 jar 与 zip 内 jar 的 SHA256 必须一致
+sha256sum Suwayomi-Server-vX-windows-x64/bin/Suwayomi-Server.jar
+unzip -p Suwayomi-Server-vX-windows-x64.zip \
+  Suwayomi-Server-vX-windows-x64/bin/Suwayomi-Server.jar | sha256sum
+```
+
+参考值（v2.4.2495）：`bin/Suwayomi-Server.jar` = 188,902,029 B，`Suwayomi-Launcher.jar` = 16,893,862 B，zip = 370,303,982 B。
+
+> 打包时会先删旧 zip 再压缩（约 370MB，耗时 1 分钟左右）。中途 `ls` 看到 zip 不存在是正常的，等打包结束；不要同时跑两个打包命令。
 
 ### GraphQL queries
 Use the GraphiQL playground at `http://localhost:4567/api/graphql` (when server is running in dev mode) to explore the schema and test queries.

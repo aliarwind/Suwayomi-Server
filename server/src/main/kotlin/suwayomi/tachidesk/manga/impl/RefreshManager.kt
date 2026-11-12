@@ -19,13 +19,17 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import org.jetbrains.exposed.v1.core.Op
 import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.core.greaterEq
+import org.jetbrains.exposed.v1.core.inSubQuery
 import org.jetbrains.exposed.v1.core.lessEq
+import org.jetbrains.exposed.v1.jdbc.select
 import org.jetbrains.exposed.v1.jdbc.selectAll
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import suwayomi.tachidesk.manga.model.table.MangaTable
+import suwayomi.tachidesk.manga.model.table.MangaUserTable
 import kotlin.coroutines.cancellation.CancellationException
 
 object RefreshManager {
@@ -218,15 +222,23 @@ object RefreshManager {
                 MangaTable
                     .selectAll()
                     .where {
-                        var condition = MangaTable.inLibrary eq true
+                        var condition: Op<Boolean> =
+                            MangaTable.id.inSubQuery(
+                                MangaUserTable
+                                    .select(MangaUserTable.manga)
+                                    .where {
+                                        var userCondition: Op<Boolean> = MangaUserTable.inLibrary eq true
+                                        if (dateFrom != null) {
+                                            userCondition = userCondition and (MangaUserTable.inLibraryAt greaterEq dateFrom)
+                                        }
+                                        if (dateTo != null) {
+                                            userCondition = userCondition and (MangaUserTable.inLibraryAt lessEq dateTo)
+                                        }
+                                        userCondition
+                                    },
+                            )
                         if (sourceId != null) {
                             condition = condition and (MangaTable.sourceReference eq sourceId)
-                        }
-                        if (dateFrom != null) {
-                            condition = condition and (MangaTable.inLibraryAt greaterEq dateFrom)
-                        }
-                        if (dateTo != null) {
-                            condition = condition and (MangaTable.inLibraryAt lessEq dateTo)
                         }
                         condition
                     }

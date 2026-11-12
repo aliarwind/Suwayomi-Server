@@ -123,8 +123,8 @@ class MangaMutation {
                                         .map { it[ChapterTable.id].value }
                                 }
                             if (chapterIds.isNotEmpty()) {
-                                Chapter.deleteChapters(chapterIds)
-                                DownloadManager.dequeue(DownloadManager.EnqueueInput(chapterIds))
+                                Chapter.deleteDownloadedChapters(userId, chapterIds)
+                                DownloadManager.dequeue(userId, chapterIds)
                             }
                         } catch (e: Exception) {
                             // Ignore errors during download cleanup

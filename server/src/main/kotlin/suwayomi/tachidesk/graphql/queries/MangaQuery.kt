@@ -58,6 +58,7 @@ import suwayomi.tachidesk.graphql.types.MangaType
 import suwayomi.tachidesk.manga.model.table.CategoryMangaTable
 import suwayomi.tachidesk.manga.model.table.CategoryTable
 import suwayomi.tachidesk.manga.model.table.ChapterTable
+import suwayomi.tachidesk.manga.model.table.ChapterUserTable
 import suwayomi.tachidesk.manga.model.table.MangaStatus
 import suwayomi.tachidesk.manga.model.table.MangaTable
 import suwayomi.tachidesk.manga.model.table.MangaUserTable
@@ -255,8 +256,8 @@ class MangaQuery {
                 andFilterWithCompare(MangaTable.chaptersLastFetchedAt, chaptersLastFetchedAt),
                 // Chapter-level filters via subqueries
                 hasDownloadedChapters.toChapterExistsOp { ChapterTable.isDownloaded eq true },
-                hasUnreadChapters.toChapterExistsOp { ChapterTable.isRead eq false },
-                hasBookmarkedChapters.toChapterExistsOp { ChapterTable.isBookmarked eq true },
+                hasUnreadChapters.toChapterUserExistsOp(value) { coalesceDefault(ChapterUserTable.isRead, false) eq false },
+                hasBookmarkedChapters.toChapterUserExistsOp(value) { coalesceDefault(ChapterUserTable.isBookmarked, false) eq true },
                 hasDuplicateChapters.toDuplicateExistsOp(),
                 andExistsWhere(
                     userId = value,
@@ -296,6 +297,19 @@ class MangaQuery {
                     )
                     false -> MangaTable.id.notInSubQuery(
                         ChapterTable.select(ChapterTable.manga).where { condition() },
+                    )
+                    else -> null
+                }
+            }
+
+            private fun BooleanFilter?.toChapterUserExistsOp(userId: Int, condition: () -> Op<Boolean>): Op<Boolean>? {
+                val filter = this ?: return null
+                return when (filter.equalTo) {
+                    true -> MangaTable.id.inSubQuery(
+                        ChapterTable.getWithUserData(userId).select(ChapterTable.manga).where { condition() },
+                    )
+                    false -> MangaTable.id.notInSubQuery(
+                        ChapterTable.getWithUserData(userId).select(ChapterTable.manga).where { condition() },
                     )
                     else -> null
                 }
