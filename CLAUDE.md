@@ -208,6 +208,9 @@ Library (wrapper, reads paginationEnabled from settings)
 │   ├── Pure MUI Grid (responsive: xs:6 sm:4 md:3 lg:2)
 │   ├── Server-side pagination: first/offset via GET_MANGAS_LIBRARY
 │   ├── Server-side search: filter { or: [title, author, artist, description, genre] }
+│   ├── Server-side filters: status, source, chapter stats (affect totalCount/pages)
+│   ├── Client-side filters for the rest (tracker, "started") on the current page
+│   ├── Entries open in a new tab (target="_blank")
 │   ├── PaginationControls (always visible, with jump-to-page input)
 │   └── fetchPolicy: 'network-only' (no stale cache issues)
 │
@@ -218,6 +221,17 @@ Library (wrapper, reads paginationEnabled from settings)
 ```
 
 The wrapper pattern avoids React hooks conditional-call errors (Error #185).
+
+### Paginated library filters
+
+- Filters expressible in the GraphQL `MangaFilter` are sent server-side so they apply to the whole category (and therefore change `totalCount`/page count), not just the fetched page: search, `hasStatus`, `hasSource`, `hasDownloadedChapters`, `hasUnreadChapters`, `hasBookmarkedChapters`, `hasDuplicateChapters`.
+- `hasSource` keeps the tri-state semantics of the infinite-scroll view: included sources → `sourceId: { in: [...] }`, excluded sources → `sourceId: { notIn: [...] }` (both may be combined). `getVisibleSourceFilters()` is shared with `useGetVisibleLibraryMangas` and drops filters for sources no longer present in the library.
+- Tracker and "started" (`hasReadChapters`) filters have no `MangaFilter` counterpart yet and are still applied client-side, so they only filter the current page.
+- If a server-side filter is active and the page is empty, the empty state shows "No manga matches this filter" instead of "The category is empty".
+
+### Library entries open in a new tab
+
+`MangaCard` has an `openInNewTab` prop which sets `target="_blank" rel="noreferrer"` on the card link (grid and list layouts). Both `LibraryMangaGrid` (infinite scroll) and `PaginatedLibraryView` enable it, so opening a manga keeps the library tab (and its page/scroll position) intact. Selection/long-press handling is unaffected.
 
 ### Category 0 (Default "All") handling
 
@@ -258,6 +272,8 @@ In `MangaQuery.kt`:
 | **Paginated library mode** | — | `PaginatedLibraryView.tsx` + `PaginationControls.tsx` |
 | **Jump-to-page** | — | Editable page number input in PaginationControls |
 | **Server-side search for paginated view** | — | Multi-field OR filter (title/author/artist/description/genre) |
+| **Server-side source filter for paginated view** | — | `PaginatedLibraryView.tsx` maps `hasSource` to `sourceId { in/notIn }`; shared prune logic in `getVisibleSourceFilters()` |
+| **Library entries open in new tab** | — | `openInNewTab` prop on `MangaCard` (`target="_blank"`), enabled by `LibraryMangaGrid` + `PaginatedLibraryView` |
 | **Performance indexes (M0069 + M0070)** | 12 个索引：inLibrary(MangaUser)、category、manga、chapter、isDownloaded，以及上游 M0061 的 7 个外键索引（M0070 补偿） | — |
 | **Category 0 pagination fix** | — | `RequestManager.ts` useGetCategoryMangas() |
 | **i18n for custom features** | — | Chinese translations in `zh-Hans.po` |
