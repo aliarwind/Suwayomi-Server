@@ -44,6 +44,16 @@ object MangaTable : IntIdTable() {
     val updateStrategy = varchar("update_strategy", 256).default(UpdateStrategy.ALWAYS_UPDATE.name)
 
     val memo = jsonObject("memo")
+
+    /**
+     * Normalized (traditional->simplified, katakana->hiragana, lowercased) concatenation of title, author,
+     * artist and genre used by the `mangas(search: ...)` query. Maintained by
+     * [suwayomi.tachidesk.manga.impl.search.MangaSearchText] on every write, backfilled in the background.
+     */
+    val searchText = unlimitedVarchar("search_text").nullable()
+
+    /** Version of the normalization rules used to build [searchText]; 0 means "never built". */
+    val searchTextVer = integer("search_text_ver").default(0)
 }
 
 fun MangaTable.toDataClass(mangaEntry: ResultRow) =

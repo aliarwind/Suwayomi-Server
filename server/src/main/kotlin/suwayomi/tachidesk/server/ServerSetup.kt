@@ -50,6 +50,7 @@ import suwayomi.tachidesk.manga.impl.backup.proto.ProtoBackupExport
 import suwayomi.tachidesk.manga.impl.download.DownloadManager
 import suwayomi.tachidesk.manga.impl.extension.Extension
 import suwayomi.tachidesk.manga.impl.extension.ExtensionStoreService
+import suwayomi.tachidesk.manga.impl.search.MangaSearchIndex
 import suwayomi.tachidesk.manga.impl.update.IUpdater
 import suwayomi.tachidesk.manga.impl.update.Updater
 import suwayomi.tachidesk.manga.impl.util.lang.renameTo
@@ -356,6 +357,10 @@ fun applicationSetup() {
             databaseUp()
         }
     }
+
+    // fill MangaTable.search_text in the background; the migration only adds the columns so that
+    // upgrading a large library does not block startup
+    MangaSearchIndex.startAsync()
 
     try {
         LocalSource.register()

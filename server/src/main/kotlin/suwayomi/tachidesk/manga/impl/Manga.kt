@@ -43,6 +43,7 @@ import org.jetbrains.exposed.v1.jdbc.transactions.suspendTransaction
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import org.jetbrains.exposed.v1.jdbc.update
 import suwayomi.tachidesk.manga.impl.download.fileProvider.impl.MissingThumbnailException
+import suwayomi.tachidesk.manga.impl.search.MangaSearchText
 import suwayomi.tachidesk.manga.impl.util.network.await
 import suwayomi.tachidesk.manga.impl.util.network.isHostUnreachable
 import suwayomi.tachidesk.manga.impl.util.source.GetSource.getSourceOrNull
@@ -211,17 +212,23 @@ object Manga {
                 hasChangedTitle &&
                     updateMangaDownloadDir(mangaId, currentTitle, source.toString(), remoteTitle)
 
+            // resolve the merged values once: they also feed the search index
+            val effectiveTitle = if (canUpdateTitle) remoteTitle else currentTitle
+            val effectiveArtist = sManga.artist ?: mangaEntry[MangaTable.artist]
+            val effectiveAuthor = sManga.author ?: mangaEntry[MangaTable.author]
+            val effectiveGenre = sManga.genre ?: mangaEntry[MangaTable.genre]
+
             MangaTable.update({ MangaTable.id eq mangaEntry[MangaTable.id] }) {
                 if (canUpdateTitle) {
                     it[MangaTable.title] = remoteTitle
                 }
                 it[MangaTable.initialized] = true
 
-                it[MangaTable.artist] = sManga.artist ?: mangaEntry[MangaTable.artist]
-                it[MangaTable.author] = sManga.author ?: mangaEntry[MangaTable.author]
+                it[MangaTable.artist] = effectiveArtist
+                it[MangaTable.author] = effectiveAuthor
                 it[MangaTable.description] = sManga.description
                     ?: mangaEntry[MangaTable.description]
-                it[MangaTable.genre] = sManga.genre ?: mangaEntry[MangaTable.genre]
+                it[MangaTable.genre] = effectiveGenre
                 it[MangaTable.status] = sManga.status
                 if (!sManga.thumbnail_url.isNullOrEmpty()) {
                     it[MangaTable.thumbnail_url] = sManga.thumbnail_url
@@ -251,6 +258,10 @@ object Manga {
 
                 it[MangaTable.updateStrategy] = sManga.update_strategy.name
                 it[MangaTable.memo] = sManga.memo
+
+                it[MangaTable.searchText] =
+                    MangaSearchText.index(effectiveTitle, effectiveAuthor, effectiveArtist, effectiveGenre)
+                it[MangaTable.searchTextVer] = MangaSearchText.VERSION
             }
         }
 

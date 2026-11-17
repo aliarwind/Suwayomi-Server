@@ -37,6 +37,9 @@ dependencies {
     implementation(libs.bundles.shared)
     testImplementation(libs.bundles.sharedTest)
 
+    // ICU: traditional->simplified folding for the search index (already bundled via AndroidCompat)
+    implementation(libs.icu4j)
+
     // OkHttp
     implementation(libs.bundles.okhttp)
     implementation(libs.okio)

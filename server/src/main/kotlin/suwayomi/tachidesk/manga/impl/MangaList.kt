@@ -18,6 +18,7 @@ import org.jetbrains.exposed.v1.jdbc.batchInsert
 import org.jetbrains.exposed.v1.jdbc.selectAll
 import org.jetbrains.exposed.v1.jdbc.statements.toExecutable
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
+import suwayomi.tachidesk.manga.impl.search.MangaSearchText
 import suwayomi.tachidesk.manga.impl.util.source.GetSource.getSourceOrStub
 import suwayomi.tachidesk.manga.model.dataclass.PagedMangaListDataClass
 import suwayomi.tachidesk.manga.model.table.MangaTable
@@ -79,6 +80,10 @@ object MangaList {
                         this[MangaTable.updateStrategy] = it.update_strategy.name
                         this[MangaTable.memo] = it.memo
 
+                        this[MangaTable.searchText] =
+                            MangaSearchText.index(it.title, it.author, it.artist, it.genre)
+                        this[MangaTable.searchTextVer] = MangaSearchText.VERSION
+
                         this[MangaTable.sourceReference] = sourceId
                     }.associate { Pair(it[MangaTable.url], it[MangaTable.id].value) }
 
@@ -102,15 +107,26 @@ object MangaList {
                         mangaToUpdate.forEach { (sManga, mangas) ->
                             val manga = mangas.first()
                             addBatch(EntityID(manga[MangaTable.id].value, MangaTable))
-                            this[MangaTable.title] = sManga.title
-                            this[MangaTable.artist] = sManga.artist ?: manga[MangaTable.artist]
-                            this[MangaTable.author] = sManga.author ?: manga[MangaTable.author]
+
+                            // resolve the merged values once: they also feed the search index
+                            val title = sManga.title
+                            val artist = sManga.artist ?: manga[MangaTable.artist]
+                            val author = sManga.author ?: manga[MangaTable.author]
+                            val genre = sManga.genre ?: manga[MangaTable.genre]
+
+                            this[MangaTable.title] = title
+                            this[MangaTable.artist] = artist
+                            this[MangaTable.author] = author
                             this[MangaTable.description] = sManga.description ?: manga[MangaTable.description]
-                            this[MangaTable.genre] = sManga.genre ?: manga[MangaTable.genre]
+                            this[MangaTable.genre] = genre
                             this[MangaTable.status] = sManga.status
                             this[MangaTable.thumbnail_url] = sManga.thumbnail_url ?: manga[MangaTable.thumbnail_url]
                             this[MangaTable.updateStrategy] = sManga.update_strategy.name
                             this[MangaTable.memo] = sManga.memo
+
+                            this[MangaTable.searchText] = MangaSearchText.index(title, author, artist, genre)
+                            this[MangaTable.searchTextVer] = MangaSearchText.VERSION
+
                             if (!sManga.thumbnail_url.isNullOrEmpty() && manga[MangaTable.thumbnail_url] != sManga.thumbnail_url) {
                                 this[MangaTable.thumbnailUrlLastFetched] = Instant.now().epochSecond
                                 Manga.clearThumbnail(manga[MangaTable.id].value)

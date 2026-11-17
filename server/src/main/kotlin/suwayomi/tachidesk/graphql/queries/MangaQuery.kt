@@ -55,6 +55,7 @@ import suwayomi.tachidesk.graphql.server.primitives.greaterNotUnique
 import suwayomi.tachidesk.graphql.server.primitives.lessNotUnique
 import suwayomi.tachidesk.graphql.types.MangaNodeList
 import suwayomi.tachidesk.graphql.types.MangaType
+import suwayomi.tachidesk.manga.impl.search.MangaSearchText
 import suwayomi.tachidesk.manga.model.table.CategoryMangaTable
 import suwayomi.tachidesk.manga.model.table.CategoryTable
 import suwayomi.tachidesk.manga.model.table.ChapterTable
@@ -345,6 +346,14 @@ class MangaQuery {
         dataFetchingEnvironment: DataFetchingEnvironment,
         condition: MangaCondition? = null,
         filter: MangaFilter? = null,
+        /**
+         * Free text search over the normalized title/author/artist/genre index
+         * ([suwayomi.tachidesk.manga.impl.search.MangaSearchText]).
+         *
+         * The query is folded (traditional -> simplified, katakana -> hiragana, lowercase), split into
+         * tokens and every token has to match, so "FGO 玛修" finds `[社团] ... (Fate/Grand Order) 瑪修`.
+         */
+        search: String? = null,
         @GraphQLDeprecated(
             "Replaced with order",
             replaceWith = ReplaceWith("order"),
@@ -365,6 +374,15 @@ class MangaQuery {
         val queryResults =
             transaction {
                 val res = MangaTable.getWithUserData(userId).selectAll().applyOps(userId, condition, filter)
+
+                val searchTokens = MangaSearchText.queryTokens(search)
+                if (searchTokens.isNotEmpty()) {
+                    // tokens are letter/digit only, so nothing in them can be a LIKE wildcard
+                    val tokenOps: List<Op<Boolean>> =
+                        searchTokens.map { token -> MangaTable.searchText like "%$token%" }
+                    val searchOp = tokenOps.reduce { acc, op -> acc and op }
+                    res.adjustWhere { (this ?: Op.TRUE) and searchOp }
+                }
 
                 val baseSort = listOf(MangaOrder(MangaOrderBy.ID, SortOrder.ASC))
                 val deprecatedSort = listOfNotNull(orderBy?.let { MangaOrder(orderBy, orderByType) })

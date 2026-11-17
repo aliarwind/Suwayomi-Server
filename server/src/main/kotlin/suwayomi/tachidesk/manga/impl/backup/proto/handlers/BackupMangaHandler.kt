@@ -41,6 +41,7 @@ import suwayomi.tachidesk.manga.impl.backup.proto.models.BackupChapter
 import suwayomi.tachidesk.manga.impl.backup.proto.models.BackupHistory
 import suwayomi.tachidesk.manga.impl.backup.proto.models.BackupManga
 import suwayomi.tachidesk.manga.impl.backup.proto.models.BackupTracking
+import suwayomi.tachidesk.manga.impl.search.MangaSearchText
 import suwayomi.tachidesk.manga.impl.track.tracker.TrackerManager
 import suwayomi.tachidesk.manga.impl.track.tracker.model.toTrack
 import suwayomi.tachidesk.manga.impl.track.tracker.model.toTrackRecordDataClass
@@ -288,18 +289,32 @@ object BackupMangaHandler {
                                 it[initialized] = manga.description != null
 
                                 it[memo] = Json.decodeFromString<JsonObject>(manga.memo.decodeToString())
+
+                                it[searchText] =
+                                    MangaSearchText.index(
+                                        manga.title,
+                                        manga.author,
+                                        manga.artist,
+                                        manga.genre.joinToString(),
+                                    )
+                                it[searchTextVer] = MangaSearchText.VERSION
                             }.value
                     } else if (keepLocalManga) {
                         dbManga[MangaTable.id].value
                     } else {
                         val dbMangaId = dbManga[MangaTable.id].value
 
+                        // resolve the merged values once: they also feed the search index
+                        val mergedArtist = manga.artist ?: dbManga[MangaTable.artist]
+                        val mergedAuthor = manga.author ?: dbManga[MangaTable.author]
+                        val mergedGenre = manga.genre.ifEmpty { null }?.joinToString() ?: dbManga[MangaTable.genre]
+
                         // Merge manga data
                         MangaTable.update({ MangaTable.id eq dbMangaId }) {
-                            it[artist] = manga.artist ?: dbManga[artist]
-                            it[author] = manga.author ?: dbManga[author]
+                            it[artist] = mergedArtist
+                            it[author] = mergedAuthor
                             it[description] = manga.description ?: dbManga[description]
-                            it[genre] = manga.genre.ifEmpty { null }?.joinToString() ?: dbManga[genre]
+                            it[genre] = mergedGenre
                             it[status] = manga.status
                             it[thumbnail_url] = manga.thumbnailUrl ?: dbManga[thumbnail_url]
                             it[updateStrategy] = manga.updateStrategy.name
@@ -307,6 +322,10 @@ object BackupMangaHandler {
                             it[initialized] = dbManga[initialized] || manga.description != null
 
                             it[memo] = Json.decodeFromString<JsonObject>(manga.memo.decodeToString())
+
+                            it[searchText] =
+                                MangaSearchText.index(dbManga[title], mergedAuthor, mergedArtist, mergedGenre)
+                            it[searchTextVer] = MangaSearchText.VERSION
                         }
 
                         dbMangaId
