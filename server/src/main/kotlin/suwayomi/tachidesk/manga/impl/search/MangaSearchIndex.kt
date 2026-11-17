@@ -77,6 +77,10 @@ object MangaSearchIndex {
         }
 
         logger.info { "Manga search index rebuilt $rebuilt manga in ${System.currentTimeMillis() - start}ms" }
+
+        // The vocabulary is built from the indexed text, so it has to wait until the index is complete.
+        MangaSearchVocabulary.build()
+
         return rebuilt
     }
 

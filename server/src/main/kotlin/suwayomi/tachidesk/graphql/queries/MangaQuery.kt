@@ -24,6 +24,7 @@ import org.jetbrains.exposed.v1.core.intLiteral
 import org.jetbrains.exposed.v1.core.less
 import org.jetbrains.exposed.v1.core.like
 import org.jetbrains.exposed.v1.core.notInSubQuery
+import org.jetbrains.exposed.v1.core.or
 import org.jetbrains.exposed.v1.jdbc.select
 import org.jetbrains.exposed.v1.jdbc.selectAll
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
@@ -56,6 +57,7 @@ import suwayomi.tachidesk.graphql.server.primitives.lessNotUnique
 import suwayomi.tachidesk.graphql.types.MangaNodeList
 import suwayomi.tachidesk.graphql.types.MangaType
 import suwayomi.tachidesk.manga.impl.search.MangaSearchText
+import suwayomi.tachidesk.manga.impl.search.MangaSearchVocabulary
 import suwayomi.tachidesk.manga.model.table.CategoryMangaTable
 import suwayomi.tachidesk.manga.model.table.CategoryTable
 import suwayomi.tachidesk.manga.model.table.ChapterTable
@@ -371,16 +373,31 @@ class MangaQuery {
         last: Int? = null,
         offset: Int? = null,
     ): MangaNodeList {
-        val queryResults =
+        val strictTokens = MangaSearchText.queryTokens(search)
+        val plan = MangaSearchVocabulary.plan(search)
+
+        // Literal interpretation: every token has to appear somewhere. Keeps precision when the words do
+        // exist in the library ("女主被NTR怀孕" stays 10 hits instead of degenerating to all NTR).
+        val strictOps: List<Op<Boolean>> =
+            strictTokens.map { token -> MangaTable.searchText like "%$token%" }
+        val strictOp: Op<Boolean>? = strictOps.reduceOrNull { acc, op -> acc and op }
+
+        // Relaxed interpretation: unknown words dropped, all genre tags OR-ed (see MangaSearchVocabulary).
+        val textOps: List<Op<Boolean>> =
+            plan.allTerms.map { token -> MangaTable.searchText like "%$token%" }
+        val tagOps: List<Op<Boolean>> =
+            plan.anyTerms.map { token -> MangaTable.searchText like "%$token%" }
+        val tagOp: Op<Boolean>? = tagOps.reduceOrNull { acc, op -> acc or op }
+        val relaxedOp: Op<Boolean>? = (textOps + listOfNotNull(tagOp)).reduceOrNull { acc, op -> acc and op }
+
+        // Always try the literal interpretation first: it is the only one that keeps "虐心的NTR" at the few
+        // books matching both words instead of degenerating to all NTR entries.
+        val strictFirst = strictOp != null && strictTokens.size > 1
+
+        fun runQuery(searchOp: Op<Boolean>?): QueryResults<Int?> =
             transaction {
                 val res = MangaTable.getWithUserData(userId).selectAll().applyOps(userId, condition, filter)
-
-                val searchTokens = MangaSearchText.queryTokens(search)
-                if (searchTokens.isNotEmpty()) {
-                    // tokens are letter/digit only, so nothing in them can be a LIKE wildcard
-                    val tokenOps: List<Op<Boolean>> =
-                        searchTokens.map { token -> MangaTable.searchText like "%$token%" }
-                    val searchOp = tokenOps.reduce { acc, op -> acc and op }
+                if (searchOp != null) {
                     res.adjustWhere { (this ?: Op.TRUE) and searchOp }
                 }
 
@@ -413,9 +430,32 @@ class MangaQuery {
                 QueryResults(total, firstResult, lastResult, res.toList())
             }
 
+        // Last resort: at least one of the known tokens has to match.
+        val orTerms = (plan.allTerms + plan.anyTerms).distinct()
+        val orOps: List<Op<Boolean>> = orTerms.map { token -> MangaTable.searchText like "%$token%" }
+        val orOp: Op<Boolean>? = orOps.takeIf { it.size > 1 }?.reduce { acc, op -> acc or op }
+
+        val candidates =
+            buildList {
+                if (strictFirst && strictOp != null) add(strictOp)
+                if (relaxedOp != null) add(relaxedOp)
+                if (orOp != null) add(orOp)
+            }
+
+        var queryResults: QueryResults<Int?>? = null
+        for (searchOp in candidates) {
+            val attempt = runQuery(searchOp)
+            if (attempt.total > 0L || attempt.results.isNotEmpty()) {
+                queryResults = attempt
+                break
+            }
+            if (queryResults == null) queryResults = attempt
+        }
+        val finalResults = queryResults ?: runQuery(null)
+
         val getAsCursor: (MangaType) -> Cursor = (order?.firstOrNull()?.by ?: MangaOrderBy.ID)::asCursor
 
-        val resultsAsType = queryResults.results.map { MangaType(it) }
+        val resultsAsType = finalResults.results.map { MangaType(it) }
 
         return MangaNodeList(
             resultsAsType,
@@ -439,12 +479,12 @@ class MangaQuery {
             },
             pageInfo =
                 PageInfo(
-                    hasNextPage = queryResults.lastKey != resultsAsType.lastOrNull()?.id,
-                    hasPreviousPage = queryResults.firstKey != resultsAsType.firstOrNull()?.id,
+                    hasNextPage = finalResults.lastKey != resultsAsType.lastOrNull()?.id,
+                    hasPreviousPage = finalResults.firstKey != resultsAsType.firstOrNull()?.id,
                     startCursor = resultsAsType.firstOrNull()?.let { getAsCursor(it) },
                     endCursor = resultsAsType.lastOrNull()?.let { getAsCursor(it) },
                 ),
-            totalCount = queryResults.total.toInt(),
+            totalCount = finalResults.total.toInt(),
         )
     }
 }
