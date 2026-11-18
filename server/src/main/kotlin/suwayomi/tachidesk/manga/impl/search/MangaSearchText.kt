@@ -23,7 +23,7 @@ import java.util.Locale
  */
 object MangaSearchText {
     /** Version of the normalization rules. Stored per row in `MangaTable.searchTextVer`. */
-    const val VERSION = 1
+    const val VERSION = 3
 
     /** Upper bound for tokens taken out of a single user query. */
     const val MAX_QUERY_TOKENS = 8
@@ -86,10 +86,27 @@ object MangaSearchText {
 
     /**
      * Builds the indexed text for a manga: normalized title, author, artist and genre tokens joined by
-     * single spaces. Lossless (nothing is dropped) because the query side matches with substring LIKEs.
+     * single spaces.
+     *
+     * The title goes through [MangaTitleCleaner] first, so release metadata (`[汉化]`, `[DL版]`,
+     * `[中国翻訳]`, `(C97)`) is not indexed: those words appear on most of the library and would match
+     * thousands of books for a query that means one thing. Circle and artist names found in the title are
+     * kept (see [MangaTitleCleaner.Cleaned.names]), so dropping the metadata does not lose names.
      */
-    fun index(vararg parts: String?): String =
-        parts
+    fun index(
+        title: String?,
+        author: String?,
+        artist: String?,
+        genre: String?,
+    ): String {
+        val cleaned = MangaTitleCleaner.clean(title)
+
+        // Sources that derive author/artist from the title often store the scanlation group there
+        // ("中国翻訳", "全彩乱涂机上色"); indexing those would undo the cleaning above.
+        val authorText = author?.takeUnless(MangaTitleCleaner::isReleaseMetadata)
+        val artistText = artist?.takeUnless(MangaTitleCleaner::isReleaseMetadata)
+
+        return listOf(cleaned.title, cleaned.names, cleaned.flags, authorText, artistText, genre)
             .asSequence()
             .filterNotNull()
             .filter { it.isNotBlank() }
@@ -97,6 +114,7 @@ object MangaSearchText {
             .flatMap { splitScriptRuns(it).asSequence() }
             .distinct()
             .joinToString(" ")
+    }
 
     /**
      * Turns a free text query into tokens. Latin and CJK runs are separated, common Chinese particles
