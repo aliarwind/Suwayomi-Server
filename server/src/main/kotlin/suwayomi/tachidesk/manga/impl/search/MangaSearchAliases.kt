@@ -32,8 +32,13 @@ object MangaSearchAliases {
             listOf("大奶", "大胸", "豪乳", "巨乳", "爆乳", "超乳"),
             listOf("无码", "无修正", "无修", "步兵"),
             listOf("有码", "有修正", "骑兵"),
-            listOf("黑丝", "连裤袜", "黑裤袜"),
-            listOf("白丝", "长筒袜", "白裤袜"),
+            // colour stays in the group: 长筒袜/连裤袜 are colour neutral, joining them would make
+            // "白丝" match every stocking in the library (measured: 12 -> 5,940)
+            listOf("白丝", "白丝袜", "白裤袜"),
+            listOf("黑丝", "黑丝袜", "黑裤袜"),
+            listOf("长筒袜", "长筒丝袜"),
+            listOf("连裤袜", "连裤丝袜"),
+            listOf("丝袜", "长筒丝袜", "连裤丝袜"),
             listOf("菊花", "肛交", "爆肛", "肛"),
             listOf("撸", "手冲", "打手枪", "自慰", "撸管"),
             listOf("妈妈", "母亲", "母上", "妈"),

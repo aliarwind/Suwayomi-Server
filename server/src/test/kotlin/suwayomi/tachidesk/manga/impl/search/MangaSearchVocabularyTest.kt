@@ -128,6 +128,13 @@ class MangaSearchVocabularyTest {
     }
 
     @Test
+    fun `colour words do not expand to colour neutral stockings`() {
+        assertTrue(MangaSearchAliases.aliasesOf("白丝").none { it in setOf("长筒袜", "连裤袜") })
+        assertTrue(MangaSearchAliases.aliasesOf("白丝").contains("白丝袜"))
+        assertTrue(MangaSearchAliases.aliasesOf("黑丝").contains("黑丝袜"))
+    }
+
+    @Test
     fun `alias table stores normalized tokens`() {
         assertEquals(setOf("寝取", "牛头人", "出轨"), MangaSearchAliases.aliasesOf("ntr").toSet())
         assertTrue(MangaSearchAliases.aliasesOf("无修正").containsAll(listOf("无码", "步兵")))
