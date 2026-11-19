@@ -1160,6 +1160,54 @@ class ServerConfig(
 
     /** ****************************************************************** **/
     /**                                                                    **/
+    /**                            AI search                               **/
+    /**                                                                    **/
+    /** ****************************************************************** **/
+
+    /** Sends free text library queries to an OpenAI compatible chat API before the rule based search runs. */
+    val llmQueryEnabled: MutableStateFlow<Boolean> by BooleanSetting(
+        protoNumber = 9500,
+        group = SettingGroup.AI,
+        privacySafe = true,
+        defaultValue = false,
+    )
+
+    /** Openai compatible endpoint, e.g. https://api.deepseek.com or http://127.0.0.1:11434/v1 for Ollama. */
+    val llmBaseUrl: MutableStateFlow<String> by StringSetting(
+        protoNumber = 9501,
+        group = SettingGroup.AI,
+        privacySafe = true,
+        defaultValue = "https://api.deepseek.com",
+    )
+
+    /** Empty for local servers that do not need a key. Never included in backups. */
+    val llmApiKey: MutableStateFlow<String> by StringSetting(
+        protoNumber = 9502,
+        group = SettingGroup.AI,
+        privacySafe = false,
+        defaultValue = "",
+        excludeFromBackup = true,
+    )
+
+    val llmChatModel: MutableStateFlow<String> by StringSetting(
+        protoNumber = 9503,
+        group = SettingGroup.AI,
+        privacySafe = true,
+        defaultValue = "deepseek-chat",
+    )
+
+    /** Hard timeout for one query parsing call; the rule based search is used when it expires. */
+    val llmQueryTimeoutMs: MutableStateFlow<Int> by IntSetting(
+        protoNumber = 9504,
+        group = SettingGroup.AI,
+        privacySafe = true,
+        defaultValue = 8000,
+        min = 1000,
+        max = 60000,
+    )
+
+    /** ****************************************************************** **/
+    /**                                                                    **/
     /**                          Renamed settings                          **/
     /**                                                                    **/
     /** ****************************************************************** **/

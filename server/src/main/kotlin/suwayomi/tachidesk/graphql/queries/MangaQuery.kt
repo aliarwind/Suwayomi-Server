@@ -56,6 +56,7 @@ import suwayomi.tachidesk.graphql.server.primitives.greaterNotUnique
 import suwayomi.tachidesk.graphql.server.primitives.lessNotUnique
 import suwayomi.tachidesk.graphql.types.MangaNodeList
 import suwayomi.tachidesk.graphql.types.MangaType
+import suwayomi.tachidesk.llm.LlmSearchService
 import suwayomi.tachidesk.manga.impl.search.MangaSearchText
 import suwayomi.tachidesk.manga.impl.search.MangaSearchVocabulary
 import suwayomi.tachidesk.manga.model.table.CategoryMangaTable
@@ -393,6 +394,25 @@ class MangaQuery {
         val tagOp: Op<Boolean>? = tagOps.reduceOrNull { acc, op -> acc or op }
         val relaxedOp: Op<Boolean>? = (textOps + listOfNotNull(tagOp)).reduceOrNull { acc, op -> acc and op }
 
+        // LLM interpretation (optional): the model decides what is a title, what is a tag and whether the
+        // tags have to all match. Only used when enabled and the model answered; otherwise everything below
+        // stays exactly as before, which is also the degradation path.
+        val llmOp: Op<Boolean>? = LlmSearchService.plan(search)?.let { llmPlan ->
+            val ops = mutableListOf<Op<Boolean>>()
+            llmPlan.titleTerms.forEach { term -> ops += MangaTable.searchText like "%$term%" }
+            if (llmPlan.tags.isNotEmpty()) {
+                val opsForTags: List<Op<Boolean>> = llmPlan.tags.map { tag -> MangaTable.searchText like "%$tag%" }
+                ops +=
+                    if (llmPlan.tagsAreAny) {
+                        opsForTags.reduce { acc, op -> acc or op }
+                    } else {
+                        opsForTags.reduce { acc, op -> acc and op }
+                    }
+            }
+            llmPlan.author?.let { author -> ops += MangaTable.searchText like "%$author%" }
+            ops.reduceOrNull { acc, op -> acc and op }
+        }
+
         // Always try the literal interpretation first: it is the only one that keeps "虐心的NTR" at the few
         // books matching both words instead of degenerating to all NTR entries.
         val strictFirst = strictOp != null && strictTokens.size > 1
@@ -440,6 +460,7 @@ class MangaQuery {
 
         val candidates =
             buildList {
+                if (llmOp != null) add(llmOp)
                 if (strictFirst && strictOp != null) add(strictOp)
                 if (relaxedOp != null) add(relaxedOp)
                 if (orOp != null) add(orOp)
