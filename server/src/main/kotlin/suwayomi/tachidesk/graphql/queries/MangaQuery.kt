@@ -382,9 +382,12 @@ class MangaQuery {
             strictTokens.map { token -> MangaTable.searchText like "%$token%" }
         val strictOp: Op<Boolean>? = strictOps.reduceOrNull { acc, op -> acc and op }
 
-        // Relaxed interpretation: unknown words dropped, all genre tags OR-ed (see MangaSearchVocabulary).
+        // Relaxed interpretation: unknown words dropped, synonyms OR-ed inside a token, genre tags OR-ed.
         val textOps: List<Op<Boolean>> =
-            plan.allTerms.map { token -> MangaTable.searchText like "%$token%" }
+            plan.textGroups.mapNotNull { group ->
+                val alternatives: List<Op<Boolean>> = group.map { token -> MangaTable.searchText like "%$token%" }
+                alternatives.reduceOrNull { acc, op -> acc or op }
+            }
         val tagOps: List<Op<Boolean>> =
             plan.anyTerms.map { token -> MangaTable.searchText like "%$token%" }
         val tagOp: Op<Boolean>? = tagOps.reduceOrNull { acc, op -> acc or op }

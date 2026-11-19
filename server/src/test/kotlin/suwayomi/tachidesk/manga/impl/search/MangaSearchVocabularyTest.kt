@@ -103,4 +103,34 @@ class MangaSearchVocabularyTest {
         assertTrue(MangaSearchVocabulary.plan("", texts, tags).isEmpty)
         assertTrue(MangaSearchVocabulary.plan(null, texts, tags).isEmpty)
     }
+
+    @Test
+    fun `unknown word is resolved through its synonym group`() {
+        val plan = MangaSearchVocabulary.plan("上位女", listOf("御姐 熟女 巨乳"), setOf("御姐", "熟女"))
+
+        assertEquals(emptyList(), plan.textGroups)
+        assertEquals(listOf("御姐"), plan.anyTerms)
+        assertEquals(emptyList(), plan.droppedTerms)
+    }
+
+    @Test
+    fun `synonyms are OR-ed inside one token group`() {
+        val plan = MangaSearchVocabulary.plan("大奶", listOf("巨乳 大奶"), emptySet())
+
+        assertEquals(listOf(listOf("大奶", "巨乳")), plan.textGroups)
+    }
+
+    @Test
+    fun `synonyms are not used when the library does not contain them`() {
+        val plan = MangaSearchVocabulary.plan("大奶", listOf("巨乳"), emptySet())
+
+        assertEquals(listOf(listOf("巨乳")), plan.textGroups)
+    }
+
+    @Test
+    fun `alias table stores normalized tokens`() {
+        assertEquals(setOf("寝取", "牛头人", "出轨"), MangaSearchAliases.aliasesOf("ntr").toSet())
+        assertTrue(MangaSearchAliases.aliasesOf("无修正").containsAll(listOf("无码", "步兵")))
+        assertTrue(MangaSearchAliases.aliasesOf("不相干的词").isEmpty())
+    }
 }

@@ -47,14 +47,17 @@ object MangaSearchVocabulary {
     private val TRAILING_FILLERS = setOf('的', '了', '吗', '呢', '吧')
 
     data class SearchPlan(
-        /** Tokens that must all match. */
-        val allTerms: List<String>,
+        /** Groups of equivalent terms that must all match; one group is "any of these". */
+        val textGroups: List<List<String>>,
         /** Genre tags of which at least one has to match; empty if the query has no tags. */
         val anyTerms: List<String>,
-        /** Tokens dropped because the library does not contain them. */
+        /** Tokens dropped because the library does not contain them (nor any of their aliases). */
         val droppedTerms: List<String>,
     ) {
-        val isEmpty: Boolean get() = allTerms.isEmpty() && anyTerms.isEmpty()
+        /** All text terms regardless of grouping, e.g. for the last resort OR query. */
+        val allTerms: List<String> get() = textGroups.flatten().distinct()
+
+        val isEmpty: Boolean get() = textGroups.isEmpty() && anyTerms.isEmpty()
     }
 
     fun isReady(): Boolean = indexedTexts.isNotEmpty()
@@ -108,17 +111,40 @@ object MangaSearchVocabulary {
         val rawTokens = MangaSearchText.queryTokens(query)
         if (rawTokens.isEmpty()) return SearchPlan(emptyList(), emptyList(), emptyList())
 
-        val resolved = rawTokens.map { it to resolve(it, texts) }
-        val usable = resolved.mapNotNull { it.second }.distinct()
+        val tokenGroups = rawTokens.map { token -> termsFor(token, texts) }
 
         // Nothing known yet (vocabulary not built) or nothing matched: keep the raw tokens as before.
-        val fallbackToRaw = usable.isEmpty()
-        val effective = if (fallbackToRaw) rawTokens else usable
+        val fallbackToRaw = tokenGroups.all { it.isEmpty() }
+        val groups = if (fallbackToRaw) rawTokens.map { listOf(it) } else tokenGroups.filter { it.isNotEmpty() }
 
-        val (tagTerms, textTerms) = effective.partition { it in tagSet }
-        val dropped = if (fallbackToRaw) emptyList() else resolved.filter { it.second == null }.map { it.first }
+        // A group that resolves to a genre tag is matched as tags (OR among themselves), because that is
+        // how users list tags ("妓女、娼妇、婊子" means any of them). All other groups are AND-ed.
+        val tagGroups = groups.filter { group -> group.any { it in tagSet } }
+        val textGroups = groups.filter { group -> group.none { it in tagSet } }
 
-        return SearchPlan(textTerms, tagTerms, dropped)
+        val dropped =
+            if (fallbackToRaw) {
+                emptyList()
+            } else {
+                rawTokens.filterIndexed { index, _ -> tokenGroups[index].isEmpty() }
+            }
+
+        return SearchPlan(textGroups, tagGroups.flatten().distinct(), dropped)
+    }
+
+    /**
+     * All terms a query token can be matched with: the token itself when the library contains it, plus the
+     * members of its synonym group that also exist. Never returns a term the library cannot match.
+     */
+    private fun termsFor(
+        token: String,
+        texts: List<String>,
+    ): List<String> {
+        val direct = resolve(token, texts)
+        val aliases = MangaSearchAliases.aliasesOf(direct ?: token).filter { exists(it, texts) }
+        if (direct == null && aliases.isEmpty()) return emptyList()
+
+        return (listOfNotNull(direct) + aliases).distinct()
     }
 
     private fun resolve(token: String, texts: List<String>): String? {
