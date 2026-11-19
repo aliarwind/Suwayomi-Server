@@ -1206,6 +1206,19 @@ class ServerConfig(
         max = 60000,
     )
 
+    /**
+     * How many recalled books are sent to the model for reranking. Every candidate costs ~30 tokens of
+     * prompt, so this is the single knob between ranking quality and latency/cost.
+     */
+    val llmRerankCandidates: MutableStateFlow<Int> by IntSetting(
+        protoNumber = 9505,
+        group = SettingGroup.AI,
+        privacySafe = true,
+        defaultValue = 150,
+        min = 10,
+        max = 400,
+    )
+
     /** ****************************************************************** **/
     /**                                                                    **/
     /**                          Renamed settings                          **/

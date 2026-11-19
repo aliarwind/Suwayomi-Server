@@ -46,11 +46,13 @@ object LlmClient {
     /**
      * Sends one chat completion request. [jsonMode] asks the server for a JSON object response, which both
      * DeepSeek and OpenAI support; servers that ignore it still answer with JSON because the prompt says so.
+     * [maxTokens] bounds the answer, which matters for reranking (one line per book).
      */
     fun complete(
         system: String,
         user: String,
         jsonMode: Boolean = true,
+        maxTokens: Int = DEFAULT_MAX_TOKENS,
     ): String? {
         val baseUrl = serverConfig.llmBaseUrl.value.trim().trimEnd('/')
         val model = serverConfig.llmChatModel.value.trim()
@@ -61,7 +63,7 @@ object LlmClient {
             buildJsonObject {
                 put("model", model)
                 put("temperature", 0)
-                put("max_tokens", 300)
+                put("max_tokens", maxTokens)
                 if (jsonMode) put("response_format", buildJsonObject { put("type", "json_object") })
                 put(
                     "messages",
@@ -125,4 +127,7 @@ object LlmClient {
                 ?.jsonPrimitive
                 ?.content
         }.getOrNull()?.takeIf { it.isNotBlank() }
+
+    /** Enough for the query plan (`{"titleTerms":...}`), reranking overrides it with a per answer budget. */
+    private const val DEFAULT_MAX_TOKENS = 300
 }
