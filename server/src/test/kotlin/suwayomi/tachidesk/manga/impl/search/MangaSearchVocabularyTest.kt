@@ -128,6 +128,35 @@ class MangaSearchVocabularyTest {
     }
 
     @Test
+    fun `glued compound word is split into the words the library knows`() {
+        val plan = MangaSearchVocabulary.plan("婊子人妻", listOf("婊子 巨乳 人妻"), emptySet())
+
+        assertEquals(listOf(listOf("婊子"), listOf("人妻")), plan.textGroups)
+        assertEquals(emptyList(), plan.droppedTerms)
+    }
+
+    @Test
+    fun `glued compound of two tags is AND-ed instead of OR-ed`() {
+        val plan =
+            MangaSearchVocabulary.plan(
+                "婊子人妻",
+                listOf("婊子 巨乳 人妻"),
+                setOf("婊子", "人妻", "巨乳"),
+            )
+
+        assertEquals(listOf(listOf("婊子"), listOf("人妻")), plan.textGroups)
+        assertEquals(emptyList(), plan.anyTerms)
+    }
+
+    @Test
+    fun `compound that cannot be fully covered falls back to the literal token`() {
+        val plan = MangaSearchVocabulary.plan("婊子人妖", listOf("婊子 巨乳 人妻"), emptySet())
+
+        assertEquals(listOf(listOf("婊子人妖")), plan.textGroups)
+        assertEquals(emptyList(), plan.droppedTerms)
+    }
+
+    @Test
     fun `colour words do not expand to colour neutral stockings`() {
         assertTrue(MangaSearchAliases.aliasesOf("白丝").none { it in setOf("长筒袜", "连裤袜") })
         assertTrue(MangaSearchAliases.aliasesOf("白丝").contains("白丝袜"))

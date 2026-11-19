@@ -42,6 +42,9 @@ object MangaSearchVocabulary {
     /** Tags longer than this are source specific noise rather than reusable search terms. */
     private const val MAX_TAG_LENGTH = 20
 
+    /** Longest word the compound splitter tries to match when a query token is not in the library. */
+    private const val MAX_SEGMENT_LENGTH = 4
+
     /** Query fillers that often get glued to a name ("像武田弘光"); stripped when the token is unknown. */
     private val LEADING_FILLERS = setOf('像', '如', '似', '是', '有', '找', '求', '看')
     private val TRAILING_FILLERS = setOf('的', '了', '吗', '呢', '吧')
@@ -111,23 +114,36 @@ object MangaSearchVocabulary {
         val rawTokens = MangaSearchText.queryTokens(query)
         if (rawTokens.isEmpty()) return SearchPlan(emptyList(), emptyList(), emptyList())
 
-        val tokenGroups = rawTokens.map { token -> termsFor(token, texts) }
+        // One token can contribute several groups: an unknown CJK compound ("婊子人妻") is split into
+        // the words the library knows ("婊子" + "人妻"), and those are AND-ed like separate tokens.
+        val tokenTerms = rawTokens.map { token -> termsFor(token, texts) }
 
         // Nothing known yet (vocabulary not built) or nothing matched: keep the raw tokens as before.
-        val fallbackToRaw = tokenGroups.all { it.isEmpty() }
-        val groups = if (fallbackToRaw) rawTokens.map { listOf(it) } else tokenGroups.filter { it.isNotEmpty() }
+        val fallbackToRaw = tokenTerms.all { it.groups.isEmpty() }
 
         // A group that resolves to a genre tag is matched as tags (OR among themselves), because that is
         // how users list tags ("妓女、娼妇、婊子" means any of them). All other groups are AND-ed.
-        val tagGroups = groups.filter { group -> group.any { it in tagSet } }
-        val textGroups = groups.filter { group -> group.none { it in tagSet } }
+        // Pieces of a glued compound are always AND-ed, even when they are tags: "婊子人妻" means both.
+        val textGroups = mutableListOf<List<String>>()
+        val tagGroups = mutableListOf<List<String>>()
+        val dropped = mutableListOf<String>()
 
-        val dropped =
-            if (fallbackToRaw) {
-                emptyList()
-            } else {
-                rawTokens.filterIndexed { index, _ -> tokenGroups[index].isEmpty() }
+        if (fallbackToRaw) {
+            rawTokens.forEach { token ->
+                if (token in tagSet) tagGroups += listOf(token) else textGroups += listOf(token)
             }
+        } else {
+            tokenTerms.forEach { terms ->
+                if (terms.groups.isEmpty()) {
+                    dropped += terms.token
+                    return@forEach
+                }
+
+                terms.groups.forEach { group ->
+                    if (!terms.segmented && group.any { it in tagSet }) tagGroups += group else textGroups += group
+                }
+            }
+        }
 
         return SearchPlan(textGroups, tagGroups.flatten().distinct(), dropped)
     }
@@ -136,15 +152,66 @@ object MangaSearchVocabulary {
      * All terms a query token can be matched with: the token itself when the library contains it, plus the
      * members of its synonym group that also exist. Never returns a term the library cannot match.
      */
+    private class TokenTerms(
+        val token: String,
+        /** OR groups for this token; several groups means the token was split into AND-ed words. */
+        val groups: List<List<String>>,
+        val segmented: Boolean = false,
+    )
+
     private fun termsFor(
         token: String,
         texts: List<String>,
-    ): List<String> {
+    ): TokenTerms {
         val direct = resolve(token, texts)
-        val aliases = MangaSearchAliases.aliasesOf(direct ?: token).filter { exists(it, texts) }
-        if (direct == null && aliases.isEmpty()) return emptyList()
+        if (direct != null) {
+            val aliases = MangaSearchAliases.aliasesOf(direct).filter { exists(it, texts) }
+            return TokenTerms(token, listOf((listOf(direct) + aliases).distinct()))
+        }
 
-        return (listOfNotNull(direct) + aliases).distinct()
+        val aliases = MangaSearchAliases.aliasesOf(token).filter { exists(it, texts) }
+        if (aliases.isNotEmpty()) return TokenTerms(token, listOf(aliases))
+
+        // Chinese has no word boundaries ("婊子人妻" is two tags glued together), so try to cover the
+        // unknown token with words the library actually contains.
+        val pieces = segmentsOf(token, texts)
+        if (pieces.isEmpty()) return TokenTerms(token, emptyList())
+
+        return TokenTerms(token, pieces.map { piece -> listOf(piece) }, segmented = true)
+    }
+
+    /**
+     * Greedy longest-match segmentation of an unknown CJK token into known words. Returns the pieces when
+     * the whole token can be covered by at least two known words, otherwise nothing (the token is dropped
+     * or falls back to a literal match as before).
+     */
+    private fun segmentsOf(
+        token: String,
+        texts: List<String>,
+    ): List<String> {
+        // Latin is already split off before tokenizing; only CJK runs are worth segmenting, and two
+        // characters is the shortest meaningful Chinese word.
+        if (token.length < 4 || token.any { it.code < 0x2E80 }) return emptyList()
+
+        val pieces = mutableListOf<String>()
+        var index = 0
+        while (index < token.length) {
+            val maxLength = minOf(MAX_SEGMENT_LENGTH, token.length - index)
+            var match: String? = null
+            for (length in maxLength downTo 2) {
+                val candidate = token.substring(index, index + length)
+                if (exists(candidate, texts)) {
+                    match = candidate
+                    break
+                }
+            }
+            if (match == null) return emptyList()
+
+            pieces += match
+            index += match.length
+        }
+
+        return if (pieces.size >= 2) pieces else emptyList()
     }
 
     private fun resolve(token: String, texts: List<String>): String? {
