@@ -57,6 +57,7 @@ import suwayomi.tachidesk.graphql.server.primitives.lessNotUnique
 import suwayomi.tachidesk.graphql.types.MangaNodeList
 import suwayomi.tachidesk.graphql.types.MangaType
 import suwayomi.tachidesk.llm.LlmSearchService
+import suwayomi.tachidesk.manga.impl.search.MangaSearchAliases
 import suwayomi.tachidesk.manga.impl.search.MangaSearchText
 import suwayomi.tachidesk.manga.impl.search.MangaSearchVocabulary
 import suwayomi.tachidesk.manga.model.table.CategoryMangaTable
@@ -70,6 +71,11 @@ import suwayomi.tachidesk.manga.model.table.getWithUserData
 import java.util.concurrent.CompletableFuture
 
 class MangaQuery {
+    private companion object {
+        /** An LLM plan matching fewer rows than this is treated as too strict and skipped. */
+        const val LLM_MIN_HITS = 20L
+    }
+
     @RequireAuth
     fun manga(
         dataFetchingEnvironment: DataFetchingEnvironment,
@@ -398,10 +404,20 @@ class MangaQuery {
         // tags have to all match. Only used when enabled and the model answered; otherwise everything below
         // stays exactly as before, which is also the degradation path.
         val llmOp: Op<Boolean>? = LlmSearchService.plan(search)?.let { llmPlan ->
+            // The model knows the meaning but not this library's wording, so every tag it returns is widened
+            // with the synonym table ("上位女" -> "御姐") before it is used.
+            fun opForTag(tag: String): Op<Boolean> {
+                val alternatives: List<Op<Boolean>> =
+                    (listOf(tag) + MangaSearchAliases.aliasesOf(tag))
+                        .distinct()
+                        .map { term -> MangaTable.searchText like "%$term%" }
+                return alternatives.reduce { acc, op -> acc or op }
+            }
+
             val ops = mutableListOf<Op<Boolean>>()
             llmPlan.titleTerms.forEach { term -> ops += MangaTable.searchText like "%$term%" }
             if (llmPlan.tags.isNotEmpty()) {
-                val opsForTags: List<Op<Boolean>> = llmPlan.tags.map { tag -> MangaTable.searchText like "%$tag%" }
+                val opsForTags: List<Op<Boolean>> = llmPlan.tags.map { tag -> opForTag(tag) }
                 ops +=
                     if (llmPlan.tagsAreAny) {
                         opsForTags.reduce { acc, op -> acc or op }
@@ -458,18 +474,21 @@ class MangaQuery {
         val orOps: List<Op<Boolean>> = orTerms.map { token -> MangaTable.searchText like "%$token%" }
         val orOp: Op<Boolean>? = orOps.takeIf { it.size > 1 }?.reduce { acc, op -> acc or op }
 
+        // A candidate is only accepted when it matches at least [minHits] rows. The LLM is stricter than the
+        // rule based tiers ("傲慢的上位女" -> 傲慢 AND 上位女 = 3 books), and a precise-but-empty result is
+        // worse for browsing than the broader rule based one, so a thin LLM plan falls through.
         val candidates =
-            buildList {
-                if (llmOp != null) add(llmOp)
-                if (strictFirst && strictOp != null) add(strictOp)
-                if (relaxedOp != null) add(relaxedOp)
-                if (orOp != null) add(orOp)
+            buildList<Pair<Op<Boolean>, Long>> {
+                if (llmOp != null) add(llmOp to LLM_MIN_HITS)
+                if (strictFirst && strictOp != null) add(strictOp to 1L)
+                if (relaxedOp != null) add(relaxedOp to 1L)
+                if (orOp != null) add(orOp to 1L)
             }
 
         var queryResults: QueryResults<Int?>? = null
-        for (searchOp in candidates) {
+        for ((searchOp, minHits) in candidates) {
             val attempt = runQuery(searchOp)
-            if (attempt.total > 0L || attempt.results.isNotEmpty()) {
+            if (attempt.total >= minHits && (attempt.total > 0L || attempt.results.isNotEmpty())) {
                 queryResults = attempt
                 break
             }
