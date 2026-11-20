@@ -36,6 +36,10 @@ object MangaSearchVocabulary {
     @Volatile
     private var tags: Set<String> = emptySet()
 
+    /** How many library entries use each tag, kept for the alias mining query ([topTags]). */
+    @Volatile
+    private var tagCounts: Map<String, Int> = emptyMap()
+
     /** A tag has to be used by at least this many library entries to count as a genre tag. */
     private const val MIN_TAG_USES = 2
 
@@ -68,7 +72,7 @@ object MangaSearchVocabulary {
     /** (Re)builds the vocabulary from the library. Safe to call more than once. */
     fun build() {
         val start = System.currentTimeMillis()
-        val (texts, tagSet) =
+        val built =
             transaction {
                 val textList = ArrayList<String>(1 shl 16)
                 val tagUses = HashMap<String, Int>()
@@ -94,16 +98,29 @@ object MangaSearchVocabulary {
                         .map { it.key }
                         .toHashSet()
 
-                textList to tagSet
+                Triple(textList, tagSet, tagUses.toMap())
             }
 
+        val (texts, tagSet, uses) = built
         indexedTexts = texts
         tags = tagSet
+        tagCounts = uses.filterKeys { it in tagSet }
         logger.info {
             "Manga search vocabulary ready: ${texts.size} indexed texts, ${tagSet.size} tags in " +
                 "${System.currentTimeMillis() - start}ms"
         }
     }
+
+    /**
+     * The most used tags of the library, with their usage counts. Feeds the offline alias mining script,
+     * which asks the model for other ways to search these terms - so new aliases can be found without
+     * reading the code.
+     */
+    fun topTags(limit: Int): List<Pair<String, Int>> =
+        tagCounts.entries
+            .sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
+            .take(limit)
+            .map { it.key to it.value }
 
     /** Splits a query into the groups described on the object. [texts] and [tagSet] are injectable for tests. */
     fun plan(

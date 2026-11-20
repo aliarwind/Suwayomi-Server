@@ -55,6 +55,7 @@ import suwayomi.tachidesk.graphql.queries.MangaQuery
 import suwayomi.tachidesk.graphql.queries.MetaQuery
 import suwayomi.tachidesk.graphql.queries.RefreshQuery
 import suwayomi.tachidesk.graphql.queries.ScanQuery
+import suwayomi.tachidesk.graphql.queries.SearchQuery
 import suwayomi.tachidesk.graphql.queries.SettingsQuery
 import suwayomi.tachidesk.graphql.queries.SourceQuery
 import suwayomi.tachidesk.graphql.queries.SyncQuery
@@ -129,6 +130,7 @@ object GraphQLSchemaProvider {
                         TopLevelObject(MetaQuery()),
                         TopLevelObject(RefreshQuery()),
                         TopLevelObject(ScanQuery()),
+                        TopLevelObject(SearchQuery()),
                         TopLevelObject(SettingsQuery()),
                         TopLevelObject(SourceQuery()),
                         TopLevelObject(SyncQuery()),

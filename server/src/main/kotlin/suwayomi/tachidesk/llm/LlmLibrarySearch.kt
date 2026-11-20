@@ -12,12 +12,14 @@ import org.jetbrains.exposed.v1.core.Op
 import org.jetbrains.exposed.v1.core.SortOrder
 import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
+import org.jetbrains.exposed.v1.core.inSubQuery
 import org.jetbrains.exposed.v1.core.like
 import org.jetbrains.exposed.v1.core.or
 import org.jetbrains.exposed.v1.jdbc.select
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import suwayomi.tachidesk.manga.impl.search.MangaSearchAliases
 import suwayomi.tachidesk.manga.impl.search.MangaSearchVocabulary
+import suwayomi.tachidesk.manga.model.table.CategoryMangaTable
 import suwayomi.tachidesk.manga.model.table.MangaTable
 import suwayomi.tachidesk.manga.model.table.MangaUserTable
 import suwayomi.tachidesk.manga.model.table.getWithUserData
@@ -72,18 +74,22 @@ object LlmLibrarySearch {
 
     fun isEnabled(): Boolean = LlmSearchService.isEnabled()
 
-    /** Ranked hits for [query] inside the library of [userId], best first. */
+    /**
+     * Ranked hits for [query] inside the library of [userId], best first. When [categoryId] is set only
+     * books of that category are ranked, so the result matches the tab the user is looking at.
+     */
     fun search(
         userId: Int,
         query: String?,
         limit: Int,
+        categoryId: Int? = null,
     ): Result {
         val trimmed = query?.trim().orEmpty()
         if (trimmed.isEmpty() || !isEnabled() || limit <= 0) {
             return Result(emptyList(), candidates = 0, degraded = false, parsed = false)
         }
 
-        val cacheKey = "$userId\u0000$trimmed\u0000$limit"
+        val cacheKey = "$userId\u0000$trimmed\u0000$limit\u0000${categoryId ?: -1}"
         val now = System.currentTimeMillis()
         synchronized(cache) {
             cache[cacheKey]?.let { entry ->
@@ -95,7 +101,7 @@ object LlmLibrarySearch {
         val started = System.currentTimeMillis()
         val plan = LlmSearchService.plan(trimmed)
         val candidateLimit = serverConfig.llmRerankCandidates.value
-        val candidates = recall(userId, trimmed, plan, candidateLimit)
+        val candidates = recall(userId, trimmed, plan, candidateLimit, categoryId)
 
         val result =
             if (candidates.isEmpty()) {
@@ -131,9 +137,20 @@ object LlmLibrarySearch {
         query: String,
         plan: LlmQueryPlan?,
         limit: Int,
+        categoryId: Int? = null,
     ): List<LlmCandidate> {
         val groups = groupsOf(plan, query)
         if (groups.isEmpty() || limit <= 0) return emptyList()
+
+        // Restrict to one category (a tab) without a join: the category membership is user scoped already,
+        // the user id is added so a stale category id can never reach another account's entries.
+        val categoryFilter: Op<Boolean>? =
+            categoryId?.let { id ->
+                MangaTable.id inSubQuery
+                    CategoryMangaTable
+                        .select(CategoryMangaTable.manga)
+                        .where { (CategoryMangaTable.category eq id) and (CategoryMangaTable.user eq userId) }
+            }
 
         fun termOp(term: String): Op<Boolean> = MangaTable.searchText like "%$term%"
 
@@ -152,7 +169,10 @@ object LlmLibrarySearch {
                     MangaTable
                         .getWithUserData(userId)
                         .select(MangaTable.id, MangaTable.title, MangaTable.searchText, MangaUserTable.inLibraryAt)
-                        .where { (MangaUserTable.inLibrary eq true) and op }
+                        .where {
+                            val base = (MangaUserTable.inLibrary eq true) and op
+                            categoryFilter?.let { base and it } ?: base
+                        }
                         .orderBy(MangaUserTable.inLibraryAt to SortOrder.DESC)
                         .limit(max)
                         .map { row ->

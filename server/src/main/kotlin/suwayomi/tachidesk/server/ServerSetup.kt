@@ -50,6 +50,7 @@ import suwayomi.tachidesk.manga.impl.backup.proto.ProtoBackupExport
 import suwayomi.tachidesk.manga.impl.download.DownloadManager
 import suwayomi.tachidesk.manga.impl.extension.Extension
 import suwayomi.tachidesk.manga.impl.extension.ExtensionStoreService
+import suwayomi.tachidesk.manga.impl.search.MangaSearchAliases
 import suwayomi.tachidesk.manga.impl.search.MangaSearchIndex
 import suwayomi.tachidesk.manga.impl.update.IUpdater
 import suwayomi.tachidesk.manga.impl.update.Updater
@@ -357,6 +358,9 @@ fun applicationSetup() {
             databaseUp()
         }
     }
+
+    // synonym groups can be extended without a rebuild: extra groups live in a JSON file in the data dir
+    MangaSearchAliases.load(File(applicationDirs.dataRoot, MangaSearchAliases.FILE_NAME))
 
     // fill MangaTable.search_text in the background; the migration only adds the columns so that
     // upgrading a large library does not block startup

@@ -45,14 +45,16 @@ class LlmQuery {
 
     /**
      * Ranked library search: the model reads the recalled titles and returns the matches in relevance
-     * order with a short reason. Returns no hits (and `enabled=false`) when the feature is disabled, and
-     * `degraded=true` when the model could not be used - callers keep their normal search in both cases.
+     * order with a short reason. [categoryId] limits the ranking to one category (the tab the user is in).
+     * Returns no hits (and `enabled=false`) when the feature is disabled, and `degraded=true` when the
+     * model could not be used - callers keep their normal search in both cases.
      */
     @RequireAuth
     fun llmSearch(
         @GraphQLIgnore userId: Int,
         query: String,
         limit: Int = 10,
+        categoryId: Int? = null,
     ): LlmSearchResult {
         if (!LlmLibrarySearch.isEnabled()) {
             return LlmSearchResult(
@@ -66,7 +68,7 @@ class LlmQuery {
         }
 
         val started = System.currentTimeMillis()
-        val result = LlmLibrarySearch.search(userId, query, limit.coerceIn(1, MAX_LIMIT))
+        val result = LlmLibrarySearch.search(userId, query, limit.coerceIn(1, MAX_LIMIT), categoryId)
 
         val ids = result.hits.map { it.id }
         val mangas =
