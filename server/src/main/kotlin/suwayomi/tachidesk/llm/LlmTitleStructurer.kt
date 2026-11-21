@@ -30,7 +30,7 @@ import java.util.concurrent.Executors
  */
 object LlmTitleStructurer {
     /** Version of the prompt plus validation rules; stored per row in [MangaLlmIndexTable.version]. */
-    const val VERSION = 1
+    const val VERSION = 2
 
     /** Books per model call: keeps the prompt small while amortizing the system prompt. */
     const val BATCH_SIZE = 20
@@ -96,12 +96,12 @@ object LlmTitleStructurer {
         你在给一个漫画库做标题结构化。每行输入是 "id<TAB>标题<TAB>标签<TAB>现有作者"，标签用逗号分隔，现有作者可能为空或是错的。
         对每一行输出一个对象，字段：
         - cleanTitle: 作品名。去掉社团名、作者名、汉化组、版本/属性标记、场次号、页数、章节范围，以及表示出处/系列的括号（如 （Fate／Grand Order）、（COMIC ペンギンクラブ 2020年2月号））之后剩下的部分。**只能删字，不能改写、不能翻译、不能补字、不能调整顺序**；删完不足两个字就把原标题原样放回来。
-        - series: 标题里写明的作品/系列名，例如 （Fate／Grand Order）、（ブルーアーカイブ） 里的那一段；没有就空字符串。可以来自标签。
+        - series: 标题里写明的作品/系列名，例如 （Fate／Grand Order）、（ブルーアーカイブ） 里的那一段；没有就空字符串。可以来自标签。（オリジナル）/（原創）/（同人誌）这类不是系列名，留空。
         - characters: 标题里出现的角色名，数组；没有就空数组。可以来自标签。
-        - circle: 同人社团/画师团体名；只在标题里能看到时给，否则空字符串。
-        - artist: 作者/画师人名；只在标题里能看到时给，否则空字符串。
+        - circle: 同人社团/画师团体名；标题或标签里能看到时给，否则空字符串。
+        - artist: 作者/画师人名；标题或标签里能看到时给，否则空字符串。
         - lang: 标题本身用什么语言写的（不是汉化后的语言）：zh / ja / en / other / unknown 之一。有假名就是 ja，纯汉字是 zh，纯拉丁字母是 en，"中国翻訳"、"汉化" 这些标记不影响 lang。
-        - flags: 版本/属性标记，只能从这个列表里选：汉化、中国翻訳、無修正、無碼、有碼、DL版、AI生成、全彩、上色、中文、英文、日文、电子版、同人誌。没有就空数组。
+        - flags: 版本/属性标记，只能从这个列表里选：汉化、中国翻訳、無修正、無碼、有碼、DL版、AI生成、全彩、上色、中文、英文、日文、电子版、同人誌。没有就空数组。疏碼/粗碼/薄碼 是"有碼"，不是"無修正"。
         - aliases: 这个 series 或 characters 在其它语言里的常见写法（中文译名、日文原名、英文名都算），最多 3 个；拿不准就给空数组。
 
         规则：
@@ -230,12 +230,16 @@ object LlmTitleStructurer {
             return null
         }
         val normalized = MangaSearchText.normalize(value)
-        if (isReleaseMetadata(value)) {
+        if (isReleaseMetadata(value) || (field == "series" && normalized in NOT_A_SERIES)) {
             rejects += "$field:$value"
             return null
         }
         val haystack = MangaSearchText.normalize(row.title + " " + row.tags + " " + row.author.orEmpty())
-        if (normalized.isEmpty() || !haystack.contains(normalized)) {
+        // "周防院 涼華" in the title, "周防院涼華" in the answer: the space is not a different name
+        val contains =
+            haystack.contains(normalized) ||
+                haystack.replace(" ", "").contains(normalized.replace(" ", ""))
+        if (normalized.isEmpty() || !contains) {
             rejects += "$field:$value"
             return null
         }
@@ -259,7 +263,7 @@ object LlmTitleStructurer {
             rejects += "cleanTitle:$candidate"
             return null
         }
-        val tidied = tidy(candidate, artist)
+        val tidied = tidy(candidate, artist, row.author)
         if (letters(MangaSearchText.normalize(tidied)).length < MIN_CLEAN_TITLE_LENGTH) {
             rejects += "cleanTitle:$candidate"
             return null
@@ -271,16 +275,20 @@ object LlmTitleStructurer {
     internal fun tidy(
         cleanTitle: String,
         artist: String?,
+        author: String? = null,
     ): String {
         var text = cleanTitle.trim()
 
-        if (!artist.isNullOrBlank()) {
-            // "Hana Bunny - Samsung Sam" / "Peachuu ｜ Bulma": the name already is the artist field
-            val prefix = Regex("^\\s*${Regex.escape(artist.trim())}\\s*[-–—─:|｜]\\s*", RegexOption.IGNORE_CASE)
+        // "Hana Bunny - Samsung Sam" / "Peachuu ｜ Bulma": the name already is the artist field. The
+        // stored author is the same convention, and it is there even when the model left artist empty.
+        for (name in listOfNotNull(artist, author).map(String::trim).filter { it.isNotEmpty() }) {
+            val prefix = Regex("^\\s*${Regex.escape(name)}\\s*[-–—─:|｜]\\s*", RegexOption.IGNORE_CASE)
             text = text.replaceFirst(prefix, "")
         }
 
-        text = EVENT_PREFIX.replace(text, "")
+        // "C97ラクガキ帳" is the event code glued to the work; "C101のほん" would lose the whole name
+        val withoutEvent = EVENT_PREFIX.replace(text, "")
+        if (letters(MangaSearchText.normalize(withoutEvent)).length >= MIN_AFTER_EVENT_STRIP) text = withoutEvent
         text = PAGE_MARK.replace(text, " ")
 
         // "… 6本汉化全集", "… 短篇数条汉化", "观者 合集"
@@ -348,6 +356,12 @@ object LlmTitleStructurer {
 
     private const val MAX_CHARACTERS = 8
     private const val MAX_ALIASES = 3
+
+    /** An event prefix may only go when enough of the work name is left ("C101のほん" is a name, not a code). */
+    private const val MIN_AFTER_EVENT_STRIP = 4
+
+    /** Markers that look like a series but only say "this is an original work". */
+    private val NOT_A_SERIES = setOf("おりじなる", "original", "原创", "同人志").map(MangaSearchText::normalize).toSet()
 
     private val LANGS = setOf("zh", "ja", "en", "other", "unknown")
 

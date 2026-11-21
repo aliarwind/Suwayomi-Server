@@ -128,10 +128,51 @@ class LlmTitleStructurerTest {
         assertEquals("ラクガキ帳", LlmTitleStructurer.tidy("C97ラクガキ帳", null))
         assertEquals("Samsung Sam", LlmTitleStructurer.tidy("Hana Bunny - Samsung Sam", "Hana Bunny"))
         assertEquals("Bulma", LlmTitleStructurer.tidy("Peachuu ｜ Bulma", "Peachuu"))
+        // the stored author follows the same "name - work" convention even when the model left artist empty
+        assertEquals("碧蓝航线 爱宕", LlmTitleStructurer.tidy("阿半今天很开心 - 碧蓝航线 爱宕", null, "阿半今天很开心"))
         // only the metadata goes: "本" is a counter, a rule must not guess that it belongs to the noise
         assertEquals("槍間家6本", LlmTitleStructurer.tidy("槍間家6本汉化全集", null))
         assertEquals("观者", LlmTitleStructurer.tidy("观者 合集", null))
         assertEquals("3a46.ゆかゆゆBBC 西行寺幽々子&八雲紫", LlmTitleStructurer.tidy("3a46.ゆかゆゆBBC 西行寺幽々子&八雲紫【111p】", null))
+    }
+
+    @Test
+    fun `an event code that is part of the work name is kept`() {
+        // "C101のほん" is the whole name; stripping the code would leave three kana
+        assertEquals("C101のほん", LlmTitleStructurer.tidy("C101のほん", null))
+        assertEquals("ラクガキ帳", LlmTitleStructurer.tidy("C97ラクガキ帳", null))
+    }
+
+    @Test
+    fun `a series marker is not a series`() {
+        val answer =
+            """
+            {"rows":[{"id":1,"cleanTitle":"しんしゅ","series":"オリジナル","characters":[],"circle":"","artist":"",
+              "lang":"ja","flags":[],"aliases":[]}]}
+            """.trimIndent()
+
+        val structure =
+            parse(
+                answer,
+                listOf(row.copy(title = "[翔玄亭 (久遠)] しんしゅ (オリジナル) [DL版]")),
+            )
+
+        assertNull(structure.series)
+        assertTrue(structure.rejects.any { it.startsWith("series:") })
+    }
+
+    @Test
+    fun `a name with different spacing is still the same name`() {
+        val structure =
+            parse(
+                """
+                {"rows":[{"id":1,"cleanTitle":"しんしゅ","series":"","characters":["周防院 涼華"],"circle":"","artist":"",
+                  "lang":"ja","flags":[],"aliases":[]}]}
+                """.trimIndent(),
+                listOf(row.copy(title = "天使学園の寮姦性活 Side Story -周防院涼華-", tags = "")),
+            )
+
+        assertEquals(listOf("周防院 涼華"), structure.characters)
     }
 
     @Test
