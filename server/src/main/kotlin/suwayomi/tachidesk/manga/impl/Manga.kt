@@ -43,6 +43,7 @@ import org.jetbrains.exposed.v1.jdbc.transactions.suspendTransaction
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import org.jetbrains.exposed.v1.jdbc.update
 import suwayomi.tachidesk.manga.impl.download.fileProvider.impl.MissingThumbnailException
+import suwayomi.tachidesk.manga.model.table.MangaMetaTable
 import suwayomi.tachidesk.manga.impl.search.MangaSearchText
 import suwayomi.tachidesk.manga.impl.util.network.await
 import suwayomi.tachidesk.manga.impl.util.network.isHostUnreachable
@@ -58,7 +59,6 @@ import suwayomi.tachidesk.manga.model.dataclass.IncludeOrExclude
 import suwayomi.tachidesk.manga.model.dataclass.MangaDataClass
 import suwayomi.tachidesk.manga.model.table.ChapterTable
 import suwayomi.tachidesk.manga.model.table.ChapterUserTable
-import suwayomi.tachidesk.manga.model.table.MangaMetaTable
 import suwayomi.tachidesk.manga.model.table.MangaTable
 import suwayomi.tachidesk.manga.model.table.MangaUserTable
 import suwayomi.tachidesk.manga.model.table.getWithUserData
@@ -212,10 +212,22 @@ object Manga {
                 hasChangedTitle &&
                     updateMangaDownloadDir(mangaId, currentTitle, source.toString(), remoteTitle)
 
+            // a corrected author must survive the refreshes, otherwise the source's title regex wins again
+            val authorLocked =
+                MangaMetaTable
+                    .selectAll()
+                    .where {
+                        (MangaMetaTable.ref eq mangaId) and
+                            (MangaMetaTable.key eq MangaMetaKeys.AUTHOR_LOCKED) and
+                            (MangaMetaTable.value eq "true")
+                    }.any()
+
             // resolve the merged values once: they also feed the search index
             val effectiveTitle = if (canUpdateTitle) remoteTitle else currentTitle
-            val effectiveArtist = sManga.artist ?: mangaEntry[MangaTable.artist]
-            val effectiveAuthor = sManga.author ?: mangaEntry[MangaTable.author]
+            val effectiveArtist =
+                if (authorLocked) mangaEntry[MangaTable.artist] else sManga.artist ?: mangaEntry[MangaTable.artist]
+            val effectiveAuthor =
+                if (authorLocked) mangaEntry[MangaTable.author] else sManga.author ?: mangaEntry[MangaTable.author]
             val effectiveGenre = sManga.genre ?: mangaEntry[MangaTable.genre]
 
             MangaTable.update({ MangaTable.id eq mangaEntry[MangaTable.id] }) {

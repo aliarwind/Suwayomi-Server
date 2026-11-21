@@ -13,7 +13,9 @@ import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.core.isNull
 import org.jetbrains.exposed.v1.core.like
 import org.jetbrains.exposed.v1.core.or
+import org.jetbrains.exposed.v1.jdbc.insert
 import org.jetbrains.exposed.v1.jdbc.select
+import org.jetbrains.exposed.v1.jdbc.selectAll
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import org.jetbrains.exposed.v1.jdbc.update
 import suwayomi.tachidesk.graphql.directives.RequireAuth
@@ -21,7 +23,9 @@ import suwayomi.tachidesk.graphql.types.LlmAuthorFixChange
 import suwayomi.tachidesk.graphql.types.LlmAuthorFixResult
 import suwayomi.tachidesk.llm.LlmAuthorFixer
 import suwayomi.tachidesk.llm.LlmClient
+import suwayomi.tachidesk.manga.impl.MangaMetaKeys
 import suwayomi.tachidesk.manga.impl.search.MangaSearchText
+import suwayomi.tachidesk.manga.model.table.MangaMetaTable
 import suwayomi.tachidesk.manga.model.table.MangaTable
 import suwayomi.tachidesk.manga.model.table.MangaUserTable
 import suwayomi.tachidesk.manga.model.table.getWithUserData
@@ -81,6 +85,7 @@ class LlmMutation {
                         it[searchText] = MangaSearchText.index(original.title, proposal.author, proposal.artist, original.genre)
                         it[searchTextVer] = MangaSearchText.VERSION
                     }
+                    lockAuthor(proposal.id, userId)
                 }
             }
         }
@@ -100,6 +105,38 @@ class LlmMutation {
         )
     }
 
+    /** Marks the manga so the next source refresh keeps the corrected author instead of the title regex. */
+    private fun lockAuthor(
+        mangaId: Int,
+        userId: Int,
+    ) {
+        val exists =
+            MangaMetaTable
+                .selectAll()
+                .where {
+                    (MangaMetaTable.ref eq mangaId) and
+                        (MangaMetaTable.key eq MangaMetaKeys.AUTHOR_LOCKED) and
+                        (MangaMetaTable.user eq userId)
+                }.any()
+
+        if (exists) {
+            MangaMetaTable.update({
+                (MangaMetaTable.ref eq mangaId) and
+                    (MangaMetaTable.key eq MangaMetaKeys.AUTHOR_LOCKED) and
+                    (MangaMetaTable.user eq userId)
+            }) {
+                it[value] = "true"
+            }
+        } else {
+            MangaMetaTable.insert {
+                it[ref] = mangaId
+                it[key] = MangaMetaKeys.AUTHOR_LOCKED
+                it[value] = "true"
+                it[user] = userId
+            }
+        }
+    }
+
     /** Authors the source could not resolve: empty, the "no idea" placeholder, or obvious metadata. */
     private fun needsFix() =
         MangaTable.author.isNull() or
@@ -113,8 +150,7 @@ class LlmMutation {
             (MangaTable.author like "%翻譯%") or
             (MangaTable.author like "%翻訳%") or
             (MangaTable.author like "%無修正%") or
-            (MangaTable.author like "%DL版%") or
-            (MangaTable.author like "%AI%")
+            (MangaTable.author like "%DL版%")
 
     private class Broken(
         val id: Int,

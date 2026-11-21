@@ -60,7 +60,8 @@ object LlmAuthorFixer {
         请给出每行的作者：
         1. 名字必须原样出现在标题或标签里，不要翻译、不要改写、不要补全、不要臆造。
         2. 标题里是 "社团 (作者)" 这种写法时，作者照抄成 "社团 (作者)"，社团要保留。
-        3. 判断不了就把 author 留空。
+        3. 标题是 "名字 - 作品名" 时，名字就是作者；"某人的作品" 这种所有格里，某人也通常是作者。
+        4. 判断不了就把 author 留空。
         只输出 JSON：{"rows":[{"id":123,"author":"社团 (作者)"}]}
         """.trimIndent()
 
@@ -86,6 +87,7 @@ object LlmAuthorFixer {
                     ?.takeIf { it.isNotEmpty() && it.length <= MAX_NAME_LENGTH }
                     ?: return@mapNotNull null
             if (!appearsIn(author, original)) return@mapNotNull null
+            if (isMetadata(author)) return@mapNotNull null
 
             Proposal(row.id, author, artistOf(author))
         }
@@ -105,6 +107,14 @@ object LlmAuthorFixer {
         return haystack.contains(author.lowercase()) || haystack.contains(artistOf(author).lowercase())
     }
 
+    /**
+     * The model still proposes scanlation groups or release labels when the title only contains those
+     * ("武田弘光的DQ11（流木個人漢化）"), so the same words the source filters are rejected here too.
+     */
+    private fun isMetadata(author: String): Boolean =
+        METADATA_KEYWORDS.any { author.contains(it, ignoreCase = true) } ||
+            COUNT_REGEX.matches(author)
+
     /** Models sometimes wrap the JSON in a fenced block or add a sentence around it. */
     private fun extractJsonObject(answer: String): String {
         val start = answer.indexOf('{')
@@ -116,4 +126,13 @@ object LlmAuthorFixer {
 
     private val WHITESPACE_REGEX = Regex("""\s+""")
     private val CIRCLE_AND_PERSON_REGEX = Regex("""^(.*?)[（(]([^（）()]{1,40})[)）]$""")
+    private val COUNT_REGEX = Regex("""^\d+\s*[pP页頁]?$""")
+
+    /** Release metadata, scanlation groups and platforms that must never be stored as an author. */
+    private val METADATA_KEYWORDS = listOf(
+        "汉化", "漢化", "翻訳", "翻译", "翻譯", "机翻", "機翻", "重嵌", "嵌字", "修图", "修圖", "自翻",
+        "上色", "全彩", "カラー", "中文", "中譯", "中译", "掃圖", "扫图", "魔改", "無修正", "无修正",
+        "DL版", "電子版", "电子版", "同人誌", "AI Generated", "AI生成", "Patreon", "Fanbox", "Fantia",
+        "BOOTH", "DLsite", "Pixiv", "Twitter", "R-18", "雜誌", "杂志", "短編集", "総集編", "合集",
+    )
 }
