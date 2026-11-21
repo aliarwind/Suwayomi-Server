@@ -18,6 +18,7 @@ import org.jetbrains.exposed.v1.jdbc.select
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import suwayomi.tachidesk.manga.impl.search.MangaSearchAliases
 import suwayomi.tachidesk.manga.impl.search.MangaSearchMatch
+import suwayomi.tachidesk.manga.impl.search.MangaSearchText
 import suwayomi.tachidesk.manga.impl.search.MangaSearchVocabulary
 import suwayomi.tachidesk.manga.model.table.CategoryMangaTable
 import suwayomi.tachidesk.manga.model.table.MangaTable
@@ -152,9 +153,10 @@ object LlmLibrarySearch {
                         .where { (CategoryMangaTable.category eq id) and (CategoryMangaTable.user eq userId) }
             }
 
-        fun termOp(term: String): Op<Boolean> = MangaSearchMatch.op(term)
-
-        fun groupOp(group: List<String>): Op<Boolean> = group.map(::termOp).reduce { acc, op -> acc or op }
+        fun groupOp(group: TermGroup): Op<Boolean> =
+            group.terms
+                .map { term -> if (group.nameOnly) MangaSearchMatch.nameOp(term) else MangaSearchMatch.op(term) }
+                .reduce { acc, op -> acc or op }
 
         fun allOp(): Op<Boolean> = groups.map(::groupOp).reduce { acc, op -> acc and op }
 
@@ -193,7 +195,7 @@ object LlmLibrarySearch {
             }
 
         // precomputed: the group count runs per candidate, and normalizing a term per candidate is too slow
-        val groupWords = groups.map { group -> group.map(MangaSearchMatch::wordsOf) }
+        val groupWords = groups.map { group -> group.terms.map(MangaSearchMatch::wordsOf) }
 
         return recalled
             .map { candidate ->
@@ -206,39 +208,63 @@ object LlmLibrarySearch {
     }
 
     /**
+     * One OR group of equivalent terms, plus whether it describes a name (`N:` tokens) instead of any
+     * indexed text. A name that the query or the model marked as an author must not match the inside of a
+     * title: `作者是ie` is about the artist called ie, not about `piece`.
+     */
+    private data class TermGroup(
+        val terms: List<String>,
+        val nameOnly: Boolean = false,
+    )
+
+    /**
      * AND-ed groups of OR-able terms. With a model plan the tags keep their AND/OR semantics; without one
      * the vocabulary plan is used, where the genre tags are "any of them".
      */
     private fun groupsOf(
         plan: LlmQueryPlan?,
         query: String,
-    ): List<List<String>> {
+    ): List<TermGroup> {
         if (plan != null) {
             // Titles and authors are widened with the synonym table like tags: a series name comes back as a
             // title term and the library may store it under another language ("ブルアカ" / "蔚蓝档案").
             fun withAliases(term: String): List<String> =
                 (listOf(term) + MangaSearchAliases.aliasesOf(term)).distinct()
 
-            val groups = mutableListOf<List<String>>()
+            val groups = mutableListOf<TermGroup>()
             // One group per entity: the alternate writings of a series are alternatives, so they belong to
             // the same OR group instead of being required one by one.
-            plan.titleGroups().forEach { group -> groups += group.flatMap(::withAliases).distinct() }
-            plan.author?.let { groups += withAliases(it) }
+            plan.titleGroups().forEach { group -> groups += TermGroup(group.flatMap(::withAliases).distinct()) }
+            plan.author?.let { groups += TermGroup(withAliases(it), nameOnly = true) }
 
             val tagsWithAliases = plan.tags.associateWith(::withAliases)
             if (plan.tagsAreAny) {
-                tagsWithAliases.values.flatten().distinct().takeIf { it.isNotEmpty() }?.let { groups += it }
+                tagsWithAliases.values
+                    .flatten()
+                    .distinct()
+                    .takeIf { it.isNotEmpty() }
+                    ?.let { groups += TermGroup(it) }
             } else {
-                tagsWithAliases.values.forEach { groups += it }
+                tagsWithAliases.values.forEach { groups += TermGroup(it) }
             }
 
-            return groups.filter { it.isNotEmpty() }
+            return groups.filter { it.terms.isNotEmpty() }
         }
 
         val vocabularyPlan = MangaSearchVocabulary.plan(query)
-        val groups = vocabularyPlan.textGroups.map { it.distinct() }.toMutableList()
-        if (vocabularyPlan.anyTerms.isNotEmpty()) groups += vocabularyPlan.anyTerms.distinct()
+        val nameTerm = MangaSearchText.nameIntentTerm(query)
+        val groups =
+            vocabularyPlan.textGroups.map { group ->
+                TermGroup(group.distinct(), nameOnly = nameTerm != null && nameTerm in group)
+            }.toMutableList()
+        if (vocabularyPlan.anyTerms.isNotEmpty()) {
+            groups +=
+                TermGroup(
+                    vocabularyPlan.anyTerms.distinct(),
+                    nameOnly = false,
+                )
+        }
 
-        return groups.filter { it.isNotEmpty() }
+        return groups.filter { it.terms.isNotEmpty() }
     }
 }

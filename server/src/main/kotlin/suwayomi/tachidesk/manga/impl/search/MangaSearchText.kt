@@ -105,6 +105,31 @@ object MangaSearchText {
         )
 
     /**
+     * Phrases that say "the words around this are an author, an artist or a circle". They are stop phrases
+     * for [queryTokens] (they carry no search signal of their own) but they do say which part of the index
+     * those words belong to: `作者是ie` is about the artist called ie, not about every title containing
+     * "pie". See [hasNameIntent] and [MangaSearchMatch.nameOp].
+     */
+    private val NAME_INTENT_PHRASES = listOf("作者", "画师", "绘师", "社团")
+
+    /** True when the query says it is looking for an author/artist/circle rather than for a title word. */
+    fun hasNameIntent(query: String?): Boolean = nameIntentTerm(query) != null
+
+    /**
+     * The word the query attributes to an author, an artist or a circle: `作者是ie` -> `ie`.
+     *
+     * Only the words after the phrase are tokenized, so a query that mentions a name and then other things
+     * ("社团是ie研究室") keeps the name and not the rest. Null when the query says nothing about a name.
+     */
+    fun nameIntentTerm(query: String?): String? {
+        if (query.isNullOrBlank()) return null
+
+        val normalized = normalize(query)
+        val phrase = NAME_INTENT_PHRASES.firstOrNull { normalized.contains(it) } ?: return null
+        return queryTokens(normalized.substringAfter(phrase)).firstOrNull()
+    }
+
+    /**
      * Folds text into the canonical form used by both the index and the query side:
      * NFKC (full width characters), traditional to simplified, lowercase, katakana to hiragana.
      */

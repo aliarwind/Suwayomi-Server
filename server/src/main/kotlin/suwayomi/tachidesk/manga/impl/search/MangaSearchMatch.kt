@@ -45,6 +45,23 @@ object MangaSearchMatch {
     }
 
     /**
+     * [term] matched only where names live (the `N:` tokens), as a whole token.
+     *
+     * The query said "作者是ie", so the answer is the artist called ie — not the 822 books whose index
+     * merely contains `ie` inside `piece`, `frieren` or `friend`. Measured on the live library: `ie`
+     * matches 961 rows as a substring but 139 as a name token, while real names are untouched
+     * (`武田弘光` 94 both ways, `あんこまん` 267 both ways — they only ever appear as `N:` tokens).
+     */
+    fun nameOp(term: String): Op<Boolean> {
+        val words = wordsOf(term)
+        if (words.isEmpty()) return op(term)
+
+        val marker = MangaSearchText.Field.NAME.marker
+        val ops: List<Op<Boolean>> = words.map { word -> MangaTable.searchText like "%$marker:$word %" }
+        return ops.reduce { acc, next -> acc and next }
+    }
+
+    /**
      * The in-memory side, for the vocabulary and the reranker's group counting. Takes [words] rather than the
      * term because these run inside a loop over every indexed text.
      */

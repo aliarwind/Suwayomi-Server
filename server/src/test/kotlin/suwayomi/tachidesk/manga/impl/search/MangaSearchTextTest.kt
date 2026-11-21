@@ -201,4 +201,20 @@ class MangaSearchTextTest {
         assertEquals(listOf("ぶるあか"), MangaSearchText.tokensOf("ブルアカ"))
         assertEquals(emptyList(), MangaSearchText.tokensOf("  "))
     }
+
+    @Test
+    fun `an author intent is recognised and folded like the rest of the query`() {
+        assertEquals("ie", MangaSearchText.nameIntentTerm("作者是ie"))
+        assertEquals("あんこまん", MangaSearchText.nameIntentTerm("畫師 あんこまん"))
+        assertEquals("いえ", MangaSearchText.nameIntentTerm("繪師是イエ"))
+        // only the words after the phrase: the rest of the query is not the name
+        assertEquals("ie", MangaSearchText.nameIntentTerm("社团是ie研究室"))
+
+        // "画风" and the words themselves are not an author intent
+        assertEquals(null, MangaSearchText.nameIntentTerm("像武田弘光的画风"))
+        assertEquals(null, MangaSearchText.nameIntentTerm("ie"))
+        assertEquals(null, MangaSearchText.nameIntentTerm(null))
+        assertTrue(!MangaSearchText.hasNameIntent("像武田弘光的画风"))
+        assertTrue(MangaSearchText.hasNameIntent("作者是ie"))
+    }
 }

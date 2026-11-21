@@ -396,18 +396,27 @@ class MangaQuery {
         val strictTokens = MangaSearchText.queryTokens(search)
         val plan = MangaSearchVocabulary.plan(search)
 
+        // "作者是ie" says which field the word after it belongs to. The phrase is a stop phrase for the
+        // tokenizer, but throwing the intent away is what made that query return 961 books for an artist
+        // that has 139: every title containing "pie" matched too.
+        val nameTerm: String? = MangaSearchText.nameIntentTerm(search)
+
+        fun recallOp(term: String): Op<Boolean> =
+            if (term == nameTerm) MangaSearchMatch.nameOp(term) else MangaSearchMatch.op(term)
+
         // Literal interpretation: every token has to appear somewhere. Keeps precision when the words do
         // exist in the library ("女主被NTR怀孕" stays 10 hits instead of degenerating to all NTR).
-        val strictOps: List<Op<Boolean>> = strictTokens.map(MangaSearchMatch::op)
+        val strictOps: List<Op<Boolean>> = strictTokens.map(::recallOp)
         val strictOp: Op<Boolean>? = strictOps.reduceOrNull { acc, op -> acc and op }
 
         // Relaxed interpretation: unknown words dropped, synonyms OR-ed inside a token, genre tags OR-ed.
         val textOps: List<Op<Boolean>> =
             plan.textGroups.mapNotNull { group ->
-                val alternatives: List<Op<Boolean>> = group.map(MangaSearchMatch::op)
+                val alternatives: List<Op<Boolean>> = group.map(::recallOp)
                 alternatives.reduceOrNull { acc, op -> acc or op }
             }
-        val tagOps: List<Op<Boolean>> = plan.anyTerms.map(MangaSearchMatch::op)
+        // a name that is also a genre tag ("ie" is one in this library) has to stay a name here as well
+        val tagOps: List<Op<Boolean>> = plan.anyTerms.map(::recallOp)
         val tagOp: Op<Boolean>? = tagOps.reduceOrNull { acc, op -> acc or op }
         val relaxedOp: Op<Boolean>? = (textOps + listOfNotNull(tagOp)).reduceOrNull { acc, op -> acc and op }
 
@@ -420,11 +429,14 @@ class MangaQuery {
             // with the synonym table ("上位女" -> "御姐", "ブルアカ" -> "蔚蓝档案") before it is used. Titles
             // need this as much as tags: a series name is returned as a title term and the library stores it
             // under whichever language the uploader used.
-            fun opFor(term: String): Op<Boolean> {
+            fun opFor(
+                term: String,
+                nameOnly: Boolean = false,
+            ): Op<Boolean> {
                 val alternatives: List<Op<Boolean>> =
                     (listOf(term) + MangaSearchAliases.aliasesOf(term))
                         .distinct()
-                        .map(MangaSearchMatch::op)
+                        .map { candidate -> if (nameOnly) MangaSearchMatch.nameOp(candidate) else MangaSearchMatch.op(candidate) }
                 return alternatives.reduce { acc, op -> acc or op }
             }
 
@@ -445,7 +457,8 @@ class MangaQuery {
                         opsForTags.reduce { acc, op -> acc and op }
                     }
             }
-            plan.author?.let { author -> ops += opFor(author) }
+            // the model put the name in its own field, so it belongs to the name region and not to titles
+            plan.author?.let { author -> ops += opFor(author, nameOnly = true) }
             ops.reduceOrNull { acc, op -> acc and op }
         }
 
