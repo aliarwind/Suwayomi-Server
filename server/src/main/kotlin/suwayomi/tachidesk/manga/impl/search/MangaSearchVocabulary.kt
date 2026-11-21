@@ -24,6 +24,7 @@ import suwayomi.tachidesk.manga.model.table.MangaUserTable
  *
  * Membership is checked with substring matching against the indexed text, because Chinese has no word
  * boundaries: the stored tokens are whole phrases, so an exact token lookup would never match "怀孕".
+ * Multi word terms (typically an alias like "blue archive") need all their words, see [MangaSearchMatch].
  *
  * Built once after the search index backfill; while empty, [plan] degrades to the previous behavior.
  */
@@ -246,8 +247,14 @@ object MangaSearchVocabulary {
         return candidates.firstOrNull { it.length >= 2 && exists(it, texts) }
     }
 
-    private fun exists(token: String, texts: List<String>): Boolean {
+    private fun exists(
+        token: String,
+        texts: List<String>,
+    ): Boolean {
         if (texts.isEmpty()) return false
-        return texts.any { it.contains(token) }
+        // the words are computed once: this runs against every indexed text, so normalizing per text would
+        // dominate the query
+        val words = MangaSearchMatch.wordsOf(token)
+        return texts.any { text -> MangaSearchMatch.matches(words, text) }
     }
 }

@@ -13,11 +13,11 @@ import org.jetbrains.exposed.v1.core.SortOrder
 import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.core.inSubQuery
-import org.jetbrains.exposed.v1.core.like
 import org.jetbrains.exposed.v1.core.or
 import org.jetbrains.exposed.v1.jdbc.select
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import suwayomi.tachidesk.manga.impl.search.MangaSearchAliases
+import suwayomi.tachidesk.manga.impl.search.MangaSearchMatch
 import suwayomi.tachidesk.manga.impl.search.MangaSearchVocabulary
 import suwayomi.tachidesk.manga.model.table.CategoryMangaTable
 import suwayomi.tachidesk.manga.model.table.MangaTable
@@ -152,7 +152,7 @@ object LlmLibrarySearch {
                         .where { (CategoryMangaTable.category eq id) and (CategoryMangaTable.user eq userId) }
             }
 
-        fun termOp(term: String): Op<Boolean> = MangaTable.searchText like "%$term%"
+        fun termOp(term: String): Op<Boolean> = MangaSearchMatch.op(term)
 
         fun groupOp(group: List<String>): Op<Boolean> = group.map(::termOp).reduce { acc, op -> acc or op }
 
@@ -192,9 +192,12 @@ object LlmLibrarySearch {
                 byId.values.toList()
             }
 
+        // precomputed: the group count runs per candidate, and normalizing a term per candidate is too slow
+        val groupWords = groups.map { group -> group.map(MangaSearchMatch::wordsOf) }
+
         return recalled
             .map { candidate ->
-                candidate to groups.count { group -> group.any { term -> candidate.searchText.contains(term) } }
+                candidate to groupWords.count { group -> group.any { words -> MangaSearchMatch.matches(words, candidate.searchText) } }
             }.sortedWith(
                 compareByDescending<Pair<Recalled, Int>> { it.second }
                     .thenByDescending { it.first.inLibraryAt },

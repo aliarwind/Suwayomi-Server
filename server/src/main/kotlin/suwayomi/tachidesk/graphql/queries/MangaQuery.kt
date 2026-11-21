@@ -25,6 +25,7 @@ import org.jetbrains.exposed.v1.core.less
 import org.jetbrains.exposed.v1.core.like
 import org.jetbrains.exposed.v1.core.notInSubQuery
 import org.jetbrains.exposed.v1.core.or
+import org.jetbrains.exposed.v1.jdbc.Query
 import org.jetbrains.exposed.v1.jdbc.select
 import org.jetbrains.exposed.v1.jdbc.selectAll
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
@@ -58,6 +59,7 @@ import suwayomi.tachidesk.graphql.types.MangaNodeList
 import suwayomi.tachidesk.graphql.types.MangaType
 import suwayomi.tachidesk.llm.LlmSearchService
 import suwayomi.tachidesk.manga.impl.search.MangaSearchAliases
+import suwayomi.tachidesk.manga.impl.search.MangaSearchMatch
 import suwayomi.tachidesk.manga.impl.search.MangaSearchRanking
 import suwayomi.tachidesk.manga.impl.search.MangaSearchText
 import suwayomi.tachidesk.manga.impl.search.MangaSearchVocabulary
@@ -396,18 +398,16 @@ class MangaQuery {
 
         // Literal interpretation: every token has to appear somewhere. Keeps precision when the words do
         // exist in the library ("女主被NTR怀孕" stays 10 hits instead of degenerating to all NTR).
-        val strictOps: List<Op<Boolean>> =
-            strictTokens.map { token -> MangaTable.searchText like "%$token%" }
+        val strictOps: List<Op<Boolean>> = strictTokens.map(MangaSearchMatch::op)
         val strictOp: Op<Boolean>? = strictOps.reduceOrNull { acc, op -> acc and op }
 
         // Relaxed interpretation: unknown words dropped, synonyms OR-ed inside a token, genre tags OR-ed.
         val textOps: List<Op<Boolean>> =
             plan.textGroups.mapNotNull { group ->
-                val alternatives: List<Op<Boolean>> = group.map { token -> MangaTable.searchText like "%$token%" }
+                val alternatives: List<Op<Boolean>> = group.map(MangaSearchMatch::op)
                 alternatives.reduceOrNull { acc, op -> acc or op }
             }
-        val tagOps: List<Op<Boolean>> =
-            plan.anyTerms.map { token -> MangaTable.searchText like "%$token%" }
+        val tagOps: List<Op<Boolean>> = plan.anyTerms.map(MangaSearchMatch::op)
         val tagOp: Op<Boolean>? = tagOps.reduceOrNull { acc, op -> acc or op }
         val relaxedOp: Op<Boolean>? = (textOps + listOfNotNull(tagOp)).reduceOrNull { acc, op -> acc and op }
 
@@ -424,7 +424,7 @@ class MangaQuery {
                 val alternatives: List<Op<Boolean>> =
                     (listOf(term) + MangaSearchAliases.aliasesOf(term))
                         .distinct()
-                        .map { candidate -> MangaTable.searchText like "%$candidate%" }
+                        .map(MangaSearchMatch::op)
                 return alternatives.reduce { acc, op -> acc or op }
             }
 
@@ -474,10 +474,15 @@ class MangaQuery {
             scoreTerms: List<String> = emptyList(),
         ): QueryResults<Int?> =
             transaction {
-                val res = MangaTable.getWithUserData(userId).selectAll().applyOps(userId, condition, filter)
-                if (searchOp != null) {
-                    res.adjustWhere { (this ?: Op.TRUE) and searchOp }
+                fun searchQuery(): Query {
+                    val query = MangaTable.getWithUserData(userId).selectAll().applyOps(userId, condition, filter)
+                    if (searchOp != null) {
+                        query.adjustWhere { (this ?: Op.TRUE) and searchOp }
+                    }
+                    return query
                 }
+
+                val res = searchQuery()
 
                 val baseSort = listOf(MangaOrder(MangaOrderBy.ID, SortOrder.ASC))
                 val deprecatedSort = listOfNotNull(orderBy?.let { MangaOrder(orderBy, orderByType) })
@@ -485,7 +490,7 @@ class MangaQuery {
 
                 // Relevance ordering is only possible for a plain, forward window of a search: a cursor is
                 // built from a real column, and an explicit sort is the caller's own choice.
-                val relevanceTerms =
+                val scoreTermsForRun =
                     scoreTerms.takeIf {
                         it.isNotEmpty() &&
                             searchOp != null &&
@@ -493,27 +498,22 @@ class MangaQuery {
                             order.isNullOrEmpty() && orderBy == null &&
                             serverConfig.searchRelevanceSortEnabled.value
                     }
+                val scoreExpression = scoreTermsForRun?.let(MangaSearchRanking::score)
 
-                // The tier is only accepted when it has enough hits, so the count is needed anyway; above
-                // [MangaSearchRanking.MAX_SORTED_HITS] it is also the reason not to sort.
-                val score = relevanceTerms?.let { terms ->
-                    val hits = res.copy().count()
-                    MangaSearchRanking
-                        .score(terms)
-                        ?.takeIf { hits in 1L..MangaSearchRanking.MAX_SORTED_HITS }
-                        ?.let { expression -> expression to hits }
-                }
+                // The tier is only accepted when it has enough hits, so the count is needed anyway; when the
+                // caller did not ask for it, still run it so the size of the hit set is known.
+                val needs = if (!paginationNeeds.total && scoreExpression != null) paginationNeeds.copy(total = true) else paginationNeeds
 
-                if (score == null) {
-                    val (total, firstResult, lastResult) =
-                        res.applySortAndGetPaginationInfo(
-                            actualSort,
-                            before,
-                            last,
-                            MangaTable.id,
-                            paginationNeeds,
-                        )
+                val (total, firstResult, lastResult) =
+                    res.applySortAndGetPaginationInfo(
+                        actualSort,
+                        before,
+                        last,
+                        MangaTable.id,
+                        needs,
+                    )
 
+                if (scoreExpression == null || total !in 1L..MangaSearchRanking.MAX_SORTED_HITS) {
                     res.applyBeforeAfter(
                         before = before,
                         after = after,
@@ -530,14 +530,11 @@ class MangaQuery {
                     return@transaction QueryResults(total, firstResult, lastResult, res.toList())
                 }
 
-                val (expression, hits) = score
-
                 // Same as the id sort above: the best match first, the oldest book first among equals, so
                 // paging through the result stays stable.
                 fun sortedQuery(descending: Boolean) =
-                    res
-                        .copy()
-                        .orderBy(expression to SortOrder.DESC)
+                    searchQuery()
+                        .orderBy(scoreExpression to SortOrder.DESC)
                         .orderBy(
                             MangaTable.id to if (descending) SortOrder.DESC else SortOrder.ASC,
                         )
@@ -555,12 +552,12 @@ class MangaQuery {
                     sorted.limit(first).offset(offset?.toLong() ?: 0)
                 }
 
-                QueryResults(hits, firstKey, lastKey, sorted.toList())
+                QueryResults(total, firstKey, lastKey, sorted.toList())
             }
 
         // Last resort: at least one of the known tokens has to match.
         val orTerms = (plan.allTerms + plan.anyTerms).distinct()
-        val orOps: List<Op<Boolean>> = orTerms.map { token -> MangaTable.searchText like "%$token%" }
+        val orOps: List<Op<Boolean>> = orTerms.map(MangaSearchMatch::op)
         val orOp: Op<Boolean>? = orOps.takeIf { it.size > 1 }?.reduce { acc, op -> acc or op }
 
         // A candidate is only accepted when it matches at least [minHits] rows. The LLM is stricter than the
