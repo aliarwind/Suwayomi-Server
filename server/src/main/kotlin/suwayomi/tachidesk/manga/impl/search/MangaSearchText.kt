@@ -23,7 +23,7 @@ import java.util.Locale
  */
 object MangaSearchText {
     /** Version of the normalization rules. Stored per row in `MangaTable.searchTextVer`. */
-    const val VERSION = 3
+    const val VERSION = 4
 
     /** Upper bound for tokens taken out of a single user query. */
     const val MAX_QUERY_TOKENS = 8
@@ -92,12 +92,19 @@ object MangaSearchText {
      * `[中国翻訳]`, `(C97)`) is not indexed: those words appear on most of the library and would match
      * thousands of books for a query that means one thing. Circle and artist names found in the title are
      * kept (see [MangaTitleCleaner.Cleaned.names]), so dropping the metadata does not lose names.
+     *
+     * [structured] is the model's view of the same title ([StructuredTitle.Fields]). When present it
+     * replaces the rule based title with `cleanTitle` and adds the fields the rules cannot see: the series
+     * (`ブルーアーカイブ` for a book whose title only has the kana), the characters, the circle and the
+     * model's spelling of the artist. Only the model's *content* flags are added — `汉化`/`DL版` stay out
+     * of the index for the same reason the cleaner drops them.
      */
     fun index(
         title: String?,
         author: String?,
         artist: String?,
         genre: String?,
+        structured: StructuredTitle.Fields? = null,
     ): String {
         val cleaned = MangaTitleCleaner.clean(title)
 
@@ -106,9 +113,26 @@ object MangaSearchText {
         val authorText = author?.takeUnless(MangaTitleCleaner::isReleaseMetadata)
         val artistText = artist?.takeUnless(MangaTitleCleaner::isReleaseMetadata)
 
-        return listOf(cleaned.title, cleaned.names, cleaned.flags, authorText, artistText, genre)
-            .asSequence()
-            .filterNotNull()
+        // the model can leave cleanTitle empty (a title with no work name at all): keep the raw title so
+        // the book does not disappear from the search
+        val titleText =
+            structured?.cleanTitle?.takeIf { it.isNotBlank() }
+                ?: cleaned.title.ifBlank { title.orEmpty() }
+
+        return listOfNotNull(
+            titleText,
+            cleaned.names,
+            structured?.series,
+            structured?.characters?.joinToString(" "),
+            structured?.circle,
+            structured?.artist,
+            structured?.aliases?.joinToString(" "),
+            structured?.contentFlags?.joinToString(" "),
+            cleaned.flags,
+            authorText,
+            artistText,
+            genre,
+        ).asSequence()
             .filter { it.isNotBlank() }
             .map(::normalize)
             .flatMap { splitScriptRuns(it).asSequence() }

@@ -19,6 +19,7 @@ import org.jetbrains.exposed.v1.jdbc.selectAll
 import org.jetbrains.exposed.v1.jdbc.statements.toExecutable
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import suwayomi.tachidesk.manga.impl.search.MangaSearchText
+import suwayomi.tachidesk.manga.impl.search.StructuredTitle
 import suwayomi.tachidesk.manga.impl.util.source.GetSource.getSourceOrStub
 import suwayomi.tachidesk.manga.model.dataclass.PagedMangaListDataClass
 import suwayomi.tachidesk.manga.model.table.MangaTable
@@ -102,6 +103,9 @@ object MangaList {
                     }
 
             if (mangaToUpdate.isNotEmpty()) {
+                // one lookup for the whole batch: the structured titles feed the search index
+                val structured =
+                    StructuredTitle.loadAll(mangaToUpdate.map { it.second.first()[MangaTable.id].value })
                 BatchUpdateStatement(MangaTable)
                     .apply {
                         mangaToUpdate.forEach { (sManga, mangas) ->
@@ -124,7 +128,8 @@ object MangaList {
                             this[MangaTable.updateStrategy] = sManga.update_strategy.name
                             this[MangaTable.memo] = sManga.memo
 
-                            this[MangaTable.searchText] = MangaSearchText.index(title, author, artist, genre)
+                            this[MangaTable.searchText] =
+                                MangaSearchText.index(title, author, artist, genre, structured[manga[MangaTable.id].value])
                             this[MangaTable.searchTextVer] = MangaSearchText.VERSION
 
                             if (!sManga.thumbnail_url.isNullOrEmpty() && manga[MangaTable.thumbnail_url] != sManga.thumbnail_url) {

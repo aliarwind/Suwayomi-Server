@@ -36,6 +36,7 @@ import suwayomi.tachidesk.llm.LlmClient
 import suwayomi.tachidesk.llm.LlmTitleStructurer
 import suwayomi.tachidesk.manga.impl.MangaAuthorLock
 import suwayomi.tachidesk.manga.impl.search.MangaSearchText
+import suwayomi.tachidesk.manga.impl.search.StructuredTitle
 import suwayomi.tachidesk.manga.model.table.MangaLlmIndexTable
 import suwayomi.tachidesk.manga.model.table.MangaTable
 import suwayomi.tachidesk.manga.model.table.MangaUserTable
@@ -95,7 +96,14 @@ class LlmMutation {
                         it[author] = proposal.author
                         it[artist] = proposal.artist
                         // the author is part of the search index, so it has to be rebuilt with it
-                        it[searchText] = MangaSearchText.index(original.title, proposal.author, proposal.artist, original.genre)
+                        it[searchText] =
+                            MangaSearchText.index(
+                                original.title,
+                                proposal.author,
+                                proposal.artist,
+                                original.genre,
+                                StructuredTitle.load(proposal.id),
+                            )
                         it[searchTextVer] = MangaSearchText.VERSION
                     }
                     MangaAuthorLock.lock(proposal.id, userId)
@@ -158,6 +166,7 @@ class LlmMutation {
                         MangaTable.title,
                         MangaTable.genre,
                         MangaTable.author,
+                        MangaTable.artist,
                         MangaTable.lastFetchedAt,
                         MangaLlmIndexTable.version,
                         MangaLlmIndexTable.inputHash,
@@ -171,6 +180,7 @@ class LlmMutation {
                             title = it[MangaTable.title],
                             tags = it[MangaTable.genre].orEmpty(),
                             author = it[MangaTable.author],
+                            artist = it[MangaTable.artist],
                             lastFetchedAt = it[MangaTable.lastFetchedAt],
                             version = it[MangaLlmIndexTable.version],
                             inputHash = it[MangaLlmIndexTable.inputHash],
@@ -218,6 +228,30 @@ class LlmMutation {
                         it[MangaLlmIndexTable.model] = model
                         it[version] = LlmTitleStructurer.VERSION
                         it[updatedAt] = stampOf(structure.id)
+                    }
+
+                    // the structured fields are part of the search index, so the row has to be rebuilt
+                    // right away; otherwise the new extraction is invisible until something else touches it
+                    candidatesById[structure.id]?.let { candidate ->
+                        MangaTable.update({ MangaTable.id eq structure.id }) {
+                            it[searchText] =
+                                MangaSearchText.index(
+                                    candidate.title,
+                                    candidate.author,
+                                    candidate.artist,
+                                    candidate.tags,
+                                    StructuredTitle.Fields(
+                                        cleanTitle = structure.cleanTitle,
+                                        series = structure.series,
+                                        characters = structure.characters,
+                                        circle = structure.circle,
+                                        artist = structure.artist,
+                                        aliases = structure.aliases,
+                                        flags = structure.flags,
+                                    ),
+                                )
+                            it[searchTextVer] = MangaSearchText.VERSION
+                        }
                     }
                 }
             }
@@ -269,6 +303,7 @@ class LlmMutation {
         val title: String,
         val tags: String,
         val author: String?,
+        val artist: String?,
         val lastFetchedAt: Long,
         val version: Int?,
         val inputHash: String?,

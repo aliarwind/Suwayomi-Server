@@ -74,6 +74,80 @@ class MangaSearchTextTest {
     }
 
     @Test
+    fun `structured series and characters are indexed`() {
+        val indexed =
+            MangaSearchText.index(
+                "光と塩非合理 (ブルーアーカイブ) [中国翻訳]",
+                "Yanje",
+                null,
+                "蔚藍檔案,調月莉央",
+                StructuredTitle.Fields(
+                    cleanTitle = "光と塩非合理",
+                    series = "ブルーアーカイブ",
+                    characters = listOf("調月莉央"),
+                    circle = null,
+                    artist = "Yanje",
+                    aliases = listOf("蔚蓝档案", "Blue Archive"),
+                    flags = listOf("中国翻訳"),
+                ),
+            )
+
+        // the series is what a `ブルアカ` query has to hit, even when the title only has the kana
+        assertTrue(indexed.contains("ぶるーあーかいぶ"), indexed)
+        assertTrue(indexed.contains("调月莉央"), indexed)
+        assertTrue(indexed.contains("blue"), indexed)
+        // the model's release markers stay out of the index, same as the rule based cleaner
+        assertTrue(!indexed.contains("中国翻訳"), indexed)
+    }
+
+    @Test
+    fun `only the content flags of the structure are indexed`() {
+        val indexed =
+            MangaSearchText.index(
+                "何かの本 [汉化] [DL版] [無修正]",
+                null,
+                null,
+                null,
+                StructuredTitle.Fields(
+                    cleanTitle = "何かの本",
+                    series = null,
+                    characters = emptyList(),
+                    circle = null,
+                    artist = null,
+                    aliases = emptyList(),
+                    flags = listOf("汉化", "DL版", "無修正"),
+                ),
+            )
+
+        assertTrue(indexed.contains("无修正"), indexed)
+        assertTrue(!indexed.contains("汉化"), indexed)
+        assertTrue(!indexed.contains("dl版"), indexed)
+    }
+
+    @Test
+    fun `an empty structured title falls back to the title`() {
+        val indexed =
+            MangaSearchText.index(
+                "[PixivFANBOX] [中国翻訳]",
+                null,
+                null,
+                null,
+                StructuredTitle.Fields(
+                    cleanTitle = null,
+                    series = null,
+                    characters = emptyList(),
+                    circle = null,
+                    artist = null,
+                    aliases = emptyList(),
+                    flags = emptyList(),
+                ),
+            )
+
+        // a book whose title carries no work name must not disappear from the search
+        assertTrue(indexed.contains("pixivfanbox"), indexed)
+    }
+
+    @Test
     fun `query tokens are capped`() {
         val tokens = MangaSearchText.queryTokens("a b c d e f g h i j k l")
         assertEquals(MangaSearchText.MAX_QUERY_TOKENS, tokens.size)

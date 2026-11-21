@@ -29,6 +29,7 @@ import suwayomi.tachidesk.manga.impl.Chapter
 import suwayomi.tachidesk.manga.impl.Library
 import suwayomi.tachidesk.manga.impl.MangaAuthorLock
 import suwayomi.tachidesk.manga.impl.search.MangaSearchText
+import suwayomi.tachidesk.manga.impl.search.StructuredTitle
 import suwayomi.tachidesk.manga.impl.Manga
 import suwayomi.tachidesk.manga.impl.download.DownloadManager
 import suwayomi.tachidesk.manga.impl.update.IUpdater
@@ -101,7 +102,13 @@ class MangaMutation {
                     it[MangaTable.author] = newAuthor
                     it[MangaTable.artist] = newArtist
                     it[MangaTable.searchText] =
-                        MangaSearchText.index(row[MangaTable.title], newAuthor, newArtist, row[MangaTable.genre])
+                        MangaSearchText.index(
+                            row[MangaTable.title],
+                            newAuthor,
+                            newArtist,
+                            row[MangaTable.genre],
+                            StructuredTitle.load(mangaId),
+                        )
                     it[MangaTable.searchTextVer] = MangaSearchText.VERSION
                 }
                 MangaAuthorLock.lock(mangaId, userId)

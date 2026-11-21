@@ -45,6 +45,7 @@ import org.jetbrains.exposed.v1.jdbc.update
 import suwayomi.tachidesk.manga.impl.download.fileProvider.impl.MissingThumbnailException
 import suwayomi.tachidesk.manga.model.table.MangaMetaTable
 import suwayomi.tachidesk.manga.impl.search.MangaSearchText
+import suwayomi.tachidesk.manga.impl.search.StructuredTitle
 import suwayomi.tachidesk.manga.impl.util.network.await
 import suwayomi.tachidesk.manga.impl.util.network.isHostUnreachable
 import suwayomi.tachidesk.manga.impl.util.source.GetSource.getSourceOrNull
@@ -265,7 +266,13 @@ object Manga {
                 it[MangaTable.memo] = sManga.memo
 
                 it[MangaTable.searchText] =
-                    MangaSearchText.index(effectiveTitle, effectiveAuthor, effectiveArtist, effectiveGenre)
+                    MangaSearchText.index(
+                        effectiveTitle,
+                        effectiveAuthor,
+                        effectiveArtist,
+                        effectiveGenre,
+                        StructuredTitle.load(mangaId),
+                    )
                 it[MangaTable.searchTextVer] = MangaSearchText.VERSION
             }
         }

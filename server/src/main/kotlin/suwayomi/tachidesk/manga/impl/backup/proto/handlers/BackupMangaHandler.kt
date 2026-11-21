@@ -42,6 +42,7 @@ import suwayomi.tachidesk.manga.impl.backup.proto.models.BackupHistory
 import suwayomi.tachidesk.manga.impl.backup.proto.models.BackupManga
 import suwayomi.tachidesk.manga.impl.backup.proto.models.BackupTracking
 import suwayomi.tachidesk.manga.impl.search.MangaSearchText
+import suwayomi.tachidesk.manga.impl.search.StructuredTitle
 import suwayomi.tachidesk.manga.impl.track.tracker.TrackerManager
 import suwayomi.tachidesk.manga.impl.track.tracker.model.toTrack
 import suwayomi.tachidesk.manga.impl.track.tracker.model.toTrackRecordDataClass
@@ -324,7 +325,13 @@ object BackupMangaHandler {
                             it[memo] = Json.decodeFromString<JsonObject>(manga.memo.decodeToString())
 
                             it[searchText] =
-                                MangaSearchText.index(dbManga[title], mergedAuthor, mergedArtist, mergedGenre)
+                                MangaSearchText.index(
+                                    dbManga[title],
+                                    mergedAuthor,
+                                    mergedArtist,
+                                    mergedGenre,
+                                    StructuredTitle.load(dbMangaId),
+                                )
                             it[searchTextVer] = MangaSearchText.VERSION
                         }
 

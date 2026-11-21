@@ -12,6 +12,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import org.jetbrains.exposed.v1.core.JoinType
 import org.jetbrains.exposed.v1.core.SortOrder
 import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.dao.id.EntityID
@@ -23,6 +24,7 @@ import org.jetbrains.exposed.v1.core.statements.BatchUpdateStatement
 import org.jetbrains.exposed.v1.jdbc.select
 import org.jetbrains.exposed.v1.jdbc.statements.toExecutable
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
+import suwayomi.tachidesk.manga.model.table.MangaLlmIndexTable
 import suwayomi.tachidesk.manga.model.table.MangaTable
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -93,8 +95,22 @@ object MangaSearchIndex {
         transaction {
             val rows =
                 MangaTable
-                    .select(MangaTable.id, MangaTable.title, MangaTable.author, MangaTable.artist, MangaTable.genre)
-                    .where {
+                    .join(MangaLlmIndexTable, JoinType.LEFT, onColumn = MangaTable.id, otherColumn = MangaLlmIndexTable.manga)
+                    .select(
+                        MangaTable.id,
+                        MangaTable.title,
+                        MangaTable.author,
+                        MangaTable.artist,
+                        MangaTable.genre,
+                        MangaLlmIndexTable.manga,
+                        MangaLlmIndexTable.cleanTitle,
+                        MangaLlmIndexTable.series,
+                        MangaLlmIndexTable.characters,
+                        MangaLlmIndexTable.circle,
+                        MangaLlmIndexTable.artist,
+                        MangaLlmIndexTable.aliases,
+                        MangaLlmIndexTable.flags,
+                    ).where {
                         (MangaTable.id greater afterId) and
                             (MangaTable.searchText.isNull() or (MangaTable.searchTextVer less MangaSearchText.VERSION))
                     }.orderBy(MangaTable.id to SortOrder.ASC)
@@ -113,6 +129,7 @@ object MangaSearchIndex {
                                 row[MangaTable.author],
                                 row[MangaTable.artist],
                                 row[MangaTable.genre],
+                                StructuredTitle.of(row)?.second,
                             )
                         this[MangaTable.searchTextVer] = MangaSearchText.VERSION
                     }
