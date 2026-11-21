@@ -211,12 +211,16 @@ object LlmLibrarySearch {
         query: String,
     ): List<List<String>> {
         if (plan != null) {
-            val groups = mutableListOf<List<String>>()
-            plan.titleTerms.forEach { groups += listOf(it) }
-            plan.author?.let { groups += listOf(it) }
+            // Titles and authors are widened with the synonym table like tags: a series name comes back as a
+            // title term and the library may store it under another language ("ブルアカ" / "蔚蓝档案").
+            fun withAliases(term: String): List<String> =
+                (listOf(term) + MangaSearchAliases.aliasesOf(term)).distinct()
 
-            val tagsWithAliases =
-                plan.tags.associateWith { tag -> (listOf(tag) + MangaSearchAliases.aliasesOf(tag)).distinct() }
+            val groups = mutableListOf<List<String>>()
+            plan.titleTerms.forEach { groups += withAliases(it) }
+            plan.author?.let { groups += withAliases(it) }
+
+            val tagsWithAliases = plan.tags.associateWith(::withAliases)
             if (plan.tagsAreAny) {
                 tagsWithAliases.values.flatten().distinct().takeIf { it.isNotEmpty() }?.let { groups += it }
             } else {

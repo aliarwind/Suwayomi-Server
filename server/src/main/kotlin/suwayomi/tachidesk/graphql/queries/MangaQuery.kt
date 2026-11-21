@@ -404,20 +404,22 @@ class MangaQuery {
         // tags have to all match. Only used when enabled and the model answered; otherwise everything below
         // stays exactly as before, which is also the degradation path.
         val llmOp: Op<Boolean>? = LlmSearchService.plan(search)?.let { llmPlan ->
-            // The model knows the meaning but not this library's wording, so every tag it returns is widened
-            // with the synonym table ("上位女" -> "御姐") before it is used.
-            fun opForTag(tag: String): Op<Boolean> {
+            // The model knows the meaning but not this library's wording, so every term it returns is widened
+            // with the synonym table ("上位女" -> "御姐", "ブルアカ" -> "蔚蓝档案") before it is used. Titles
+            // need this as much as tags: a series name is returned as a title term and the library stores it
+            // under whichever language the uploader used.
+            fun opFor(term: String): Op<Boolean> {
                 val alternatives: List<Op<Boolean>> =
-                    (listOf(tag) + MangaSearchAliases.aliasesOf(tag))
+                    (listOf(term) + MangaSearchAliases.aliasesOf(term))
                         .distinct()
-                        .map { term -> MangaTable.searchText like "%$term%" }
+                        .map { candidate -> MangaTable.searchText like "%$candidate%" }
                 return alternatives.reduce { acc, op -> acc or op }
             }
 
             val ops = mutableListOf<Op<Boolean>>()
-            llmPlan.titleTerms.forEach { term -> ops += MangaTable.searchText like "%$term%" }
+            llmPlan.titleTerms.forEach { term -> ops += opFor(term) }
             if (llmPlan.tags.isNotEmpty()) {
-                val opsForTags: List<Op<Boolean>> = llmPlan.tags.map { tag -> opForTag(tag) }
+                val opsForTags: List<Op<Boolean>> = llmPlan.tags.map { tag -> opFor(tag) }
                 ops +=
                     if (llmPlan.tagsAreAny) {
                         opsForTags.reduce { acc, op -> acc or op }
@@ -425,7 +427,7 @@ class MangaQuery {
                         opsForTags.reduce { acc, op -> acc and op }
                     }
             }
-            llmPlan.author?.let { author -> ops += MangaTable.searchText like "%$author%" }
+            llmPlan.author?.let { author -> ops += opFor(author) }
             ops.reduceOrNull { acc, op -> acc and op }
         }
 
