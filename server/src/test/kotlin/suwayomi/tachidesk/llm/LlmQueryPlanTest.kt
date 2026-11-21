@@ -54,4 +54,32 @@ class LlmQueryPlanTest {
         assertTrue(LlmQueryPlan().isEmpty())
         assertNull(LlmQueryPlan(tagMode = "AND", tags = listOf("")).sanitized().author)
     }
+
+    @Test
+    fun `writings of one entity end up in one group`() {
+        val plan = LlmQueryPlan(titleTerms = listOf("舰これ", "舰c", "舰队collection")).sanitized()
+        // Shape of the real alias file: "舰c"/"舰队collection" share a group whose long member also
+        // contains the literal "舰これ".
+        val kancolle = listOf("舰队これくしょん -舰これ-", "舰colle", "kancolle")
+        val aliases = mapOf("舰c" to kancolle, "舰队collection" to kancolle)
+
+        assertEquals(
+            listOf(listOf("舰これ", "舰c", "舰队collection")),
+            plan.titleGroups { aliases[it].orEmpty() },
+        )
+    }
+
+    @Test
+    fun `different entities stay in separate groups`() {
+        val plan = LlmQueryPlan(titleTerms = listOf("ブルアカ", "マシュ")).sanitized()
+
+        assertEquals(listOf(listOf("ぶるあか"), listOf("ましゅ")), plan.titleGroups { emptyList() })
+    }
+
+    @Test
+    fun `a term that contains another one is the same entity`() {
+        val plan = LlmQueryPlan(titleTerms = listOf("fate", "fate stay night")).sanitized()
+
+        assertEquals(1, plan.titleGroups { emptyList() }.size)
+    }
 }

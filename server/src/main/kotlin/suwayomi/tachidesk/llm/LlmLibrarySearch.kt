@@ -217,7 +217,9 @@ object LlmLibrarySearch {
                 (listOf(term) + MangaSearchAliases.aliasesOf(term)).distinct()
 
             val groups = mutableListOf<List<String>>()
-            plan.titleTerms.forEach { groups += withAliases(it) }
+            // One group per entity: the alternate writings of a series are alternatives, so they belong to
+            // the same OR group instead of being required one by one.
+            plan.titleGroups().forEach { group -> groups += group.flatMap(::withAliases).distinct() }
             plan.author?.let { groups += withAliases(it) }
 
             val tagsWithAliases = plan.tags.associateWith(::withAliases)

@@ -416,8 +416,14 @@ class MangaQuery {
                 return alternatives.reduce { acc, op -> acc or op }
             }
 
-            val ops = mutableListOf<Op<Boolean>>()
-            llmPlan.titleTerms.forEach { term -> ops += opFor(term) }
+            // Several writings of one entity ("舰これ"/"舰c"/"舰队collection") are alternatives, not extra
+            // requirements: OR them inside the group, AND the groups (a series plus one of its characters).
+            val titleOps: List<Op<Boolean>> =
+                llmPlan.titleGroups().map { group ->
+                    group.map { term -> opFor(term) }.reduce { acc, op -> acc or op }
+                }
+
+            val ops = titleOps.toMutableList()
             if (llmPlan.tags.isNotEmpty()) {
                 val opsForTags: List<Op<Boolean>> = llmPlan.tags.map { tag -> opFor(tag) }
                 ops +=
