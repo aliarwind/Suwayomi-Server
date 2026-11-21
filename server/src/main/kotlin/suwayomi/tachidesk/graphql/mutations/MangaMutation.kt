@@ -19,6 +19,7 @@ import org.jetbrains.exposed.v1.jdbc.deleteWhere
 import org.jetbrains.exposed.v1.jdbc.select
 import org.jetbrains.exposed.v1.jdbc.selectAll
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
+import org.jetbrains.exposed.v1.jdbc.update
 import suwayomi.tachidesk.graphql.directives.RequireAuth
 import suwayomi.tachidesk.graphql.types.ChapterType
 import suwayomi.tachidesk.graphql.types.MangaMetaType
@@ -26,6 +27,8 @@ import suwayomi.tachidesk.graphql.types.MangaType
 import suwayomi.tachidesk.graphql.types.MetaInput
 import suwayomi.tachidesk.manga.impl.Chapter
 import suwayomi.tachidesk.manga.impl.Library
+import suwayomi.tachidesk.manga.impl.MangaAuthorLock
+import suwayomi.tachidesk.manga.impl.search.MangaSearchText
 import suwayomi.tachidesk.manga.impl.Manga
 import suwayomi.tachidesk.manga.impl.download.DownloadManager
 import suwayomi.tachidesk.manga.impl.update.IUpdater
@@ -50,6 +53,9 @@ class MangaMutation {
 
     data class UpdateMangaPatch(
         val inLibrary: Boolean? = null,
+        /** Manual override; the value is kept across source refreshes (see [MangaMetaKeys.AUTHOR_LOCKED]). */
+        val author: String? = null,
+        val artist: String? = null,
     )
 
     data class UpdateMangaPayload(
@@ -74,6 +80,34 @@ class MangaMutation {
         val patch: UpdateMangaPatch,
     )
 
+    /**
+     * Manual author/artist override. The value is written together with its search text and marked as
+     * locked, otherwise the next source refresh puts the title based guess back.
+     */
+    private fun updateAuthorPatch(
+        userId: Int,
+        ids: List<Int>,
+        patch: UpdateMangaPatch,
+    ) {
+        transaction {
+            ids.forEach { mangaId ->
+                val row =
+                    MangaTable.selectAll().where { MangaTable.id eq mangaId }.firstOrNull()
+                        ?: return@forEach
+                val newAuthor = patch.author?.trim()?.ifEmpty { null } ?: row[MangaTable.author]
+                val newArtist = patch.artist?.trim()?.ifEmpty { null } ?: row[MangaTable.artist]
+
+                MangaTable.update({ MangaTable.id eq mangaId }) {
+                    it[MangaTable.author] = newAuthor
+                    it[MangaTable.artist] = newArtist
+                    it[MangaTable.searchText] =
+                        MangaSearchText.index(row[MangaTable.title], newAuthor, newArtist, row[MangaTable.genre])
+                    it[MangaTable.searchTextVer] = MangaSearchText.VERSION
+                }
+                MangaAuthorLock.lock(mangaId, userId)
+            }
+        }
+    }
     private suspend fun updateMangas(
         @GraphQLIgnore
         userId: Int,
@@ -81,6 +115,9 @@ class MangaMutation {
         patch: UpdateMangaPatch,
     ) {
         transaction {
+            if (patch.author != null || patch.artist != null) {
+                updateAuthorPatch(userId, ids, patch)
+            }
             if (patch.inLibrary != null) {
                 val now = Instant.now().epochSecond
                 MangaUserTable.batchUpsert(ids, MangaUserTable.user, MangaUserTable.manga) { mangaId ->

@@ -213,14 +213,7 @@ object Manga {
                     updateMangaDownloadDir(mangaId, currentTitle, source.toString(), remoteTitle)
 
             // a corrected author must survive the refreshes, otherwise the source's title regex wins again
-            val authorLocked =
-                MangaMetaTable
-                    .selectAll()
-                    .where {
-                        (MangaMetaTable.ref eq mangaId) and
-                            (MangaMetaTable.key eq MangaMetaKeys.AUTHOR_LOCKED) and
-                            (MangaMetaTable.value eq "true")
-                    }.any()
+            val authorLocked = MangaAuthorLock.isLocked(mangaId)
 
             // resolve the merged values once: they also feed the search index
             val effectiveTitle = if (canUpdateTitle) remoteTitle else currentTitle
