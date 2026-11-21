@@ -46,6 +46,7 @@ import suwayomi.tachidesk.global.model.table.UserAccountTable
 import suwayomi.tachidesk.graphql.types.AuthMode
 import suwayomi.tachidesk.graphql.types.DatabaseType
 import suwayomi.tachidesk.i18n.LocalizationHelper
+import suwayomi.tachidesk.llm.LlmStructureJob
 import suwayomi.tachidesk.manga.impl.backup.proto.ProtoBackupExport
 import suwayomi.tachidesk.manga.impl.download.DownloadManager
 import suwayomi.tachidesk.manga.impl.extension.Extension
@@ -365,6 +366,10 @@ fun applicationSetup() {
     // fill MangaTable.search_text in the background; the migration only adds the columns so that
     // upgrading a large library does not block startup
     MangaSearchIndex.startAsync()
+
+    // keep the structured title index current: books added or refreshed by a source are extracted in
+    // the background, so the search keeps finding them by series and characters without a manual script
+    LlmStructureJob.startAsync()
 
     try {
         LocalSource.register()

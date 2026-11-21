@@ -1219,6 +1219,38 @@ class ServerConfig(
         max = 400,
     )
 
+    /**
+     * Keeps the structured title index current in the background: new books and books a source refreshed
+     * are sent to the model in small batches, so the library search keeps finding them by series and
+     * characters. Only runs while [llmQueryEnabled] has credentials configured.
+     */
+    val llmStructureJobEnabled: MutableStateFlow<Boolean> by BooleanSetting(
+        protoNumber = 9506,
+        group = SettingGroup.AI,
+        privacySafe = true,
+        defaultValue = true,
+    )
+
+    /** How often the incremental structured title run looks for pending books. */
+    val llmStructureJobIntervalMinutes: MutableStateFlow<Int> by IntSetting(
+        protoNumber = 9507,
+        group = SettingGroup.AI,
+        privacySafe = true,
+        defaultValue = 360,
+        min = 5,
+        max = 10080,
+    )
+
+    /** Delay before the first incremental run after a start, so a restart does not add model calls. */
+    val llmStructureJobInitialDelayMinutes: MutableStateFlow<Int> by IntSetting(
+        protoNumber = 9508,
+        group = SettingGroup.AI,
+        privacySafe = true,
+        defaultValue = 10,
+        min = 1,
+        max = 1440,
+    )
+
     /** ****************************************************************** **/
     /**                                                                    **/
     /**                          Renamed settings                          **/
