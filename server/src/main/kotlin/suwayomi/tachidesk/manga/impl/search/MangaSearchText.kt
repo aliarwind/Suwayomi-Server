@@ -23,10 +23,41 @@ import java.util.Locale
  */
 object MangaSearchText {
     /** Version of the normalization rules. Stored per row in `MangaTable.searchTextVer`. */
-    const val VERSION = 4
+    const val VERSION = 5
 
     /** Upper bound for tokens taken out of a single user query. */
     const val MAX_QUERY_TOKENS = 8
+
+    /**
+     * Where an indexed token came from. Every token of the index is prefixed with its marker
+     * (`T:ぶるあか`), so a hit can be weighted by the field that produced it
+     * ([MangaSearchRanking]) instead of treating a circle name like a work title.
+     *
+     * The markers are uppercase on purpose: [normalize] lowercases everything, so a marker can never be
+     * confused with the inside of a token, and a one letter query ("`c`") does not suddenly look like a
+     * library term just because every row contains `C:` somewhere.
+     */
+    enum class Field(
+        val marker: String,
+    ) {
+        /** The work title: what the cleaner (or the model) kept of the source title. */
+        TITLE("T"),
+
+        /** Names: circles, artists, authors and the names the cleaner dug out of the title. */
+        NAME("N"),
+
+        /** The series the model recognised. */
+        SERIES("S"),
+
+        /** Characters the model recognised. */
+        CHARACTER("C"),
+
+        /** Alternative spellings the model proposed (cross language series/character names). */
+        ALIAS("X"),
+
+        /** Release/genre labels: genre column, content flags. */
+        TAG("G"),
+    }
 
     private val TRANSFORMS = listOf("Traditional-Simplified", "Hant-Hans")
 
@@ -98,6 +129,11 @@ object MangaSearchText {
      * (`ブルーアーカイブ` for a book whose title only has the kana), the characters, the circle and the
      * model's spelling of the artist. Only the model's *content* flags are added — `汉化`/`DL版` stay out
      * of the index for the same reason the cleaner drops them.
+     *
+     * Every token is prefixed with the [Field] it came from, and the whole index ends with a space: both
+     * together make `LIKE '%T:term %'` an exact token match, which is what [MangaSearchRanking] scores.
+     * Plain substring matching (`LIKE '%term%'`, the recall path) is unaffected by the markers, so which
+     * books are found does not change — only the order they come back in.
      */
     fun index(
         title: String?,
@@ -119,26 +155,44 @@ object MangaSearchText {
             structured?.cleanTitle?.takeIf { it.isNotBlank() }
                 ?: cleaned.title.ifBlank { title.orEmpty() }
 
-        return listOfNotNull(
-            titleText,
-            cleaned.names,
-            structured?.series,
-            structured?.characters?.joinToString(" "),
-            structured?.circle,
-            structured?.artist,
-            structured?.aliases?.joinToString(" "),
-            structured?.contentFlags?.joinToString(" "),
-            cleaned.flags,
-            authorText,
-            artistText,
-            genre,
-        ).asSequence()
-            .filter { it.isNotBlank() }
-            .map(::normalize)
-            .flatMap { splitScriptRuns(it).asSequence() }
-            .distinct()
-            .joinToString(" ")
+        val fields: List<Pair<Field, String?>> =
+            buildList {
+                add(Field.TITLE to titleText)
+                add(Field.NAME to cleaned.names)
+                structured?.let {
+                    add(Field.SERIES to it.series)
+                    add(Field.CHARACTER to it.characters.joinToString(" "))
+                    add(Field.NAME to it.circle)
+                    add(Field.NAME to it.artist)
+                    add(Field.ALIAS to it.aliases.joinToString(" "))
+                    add(Field.TAG to it.contentFlags.joinToString(" "))
+                }
+                add(Field.TAG to cleaned.flags)
+                add(Field.NAME to authorText)
+                add(Field.NAME to artistText)
+                add(Field.TAG to genre)
+            }
+
+        val indexed =
+            fields
+                .asSequence()
+                .mapNotNull { (field, value) ->
+                    value?.takeIf { it.isNotBlank() }?.let { field to it }
+                }.flatMap { (field, value) ->
+                    // the marker goes on after the split: the splitter separates latin from CJK, so a
+                    // prefix added earlier would become its own run and lose the token it belongs to
+                    splitScriptRuns(normalize(value)).asSequence().map { token -> "${field.marker}:$token" }
+                }.distinct()
+                .joinToString(" ")
+
+        return if (indexed.isEmpty()) "" else "$indexed "
     }
+
+    /**
+     * Splits [value] into tokens the same way [index] does, without the field markers. Used by the ranking
+     * to turn a query term (which may be a multi word title) into the tokens actually stored in the index.
+     */
+    fun tokensOf(value: String): List<String> = splitScriptRuns(normalize(value))
 
     /**
      * Turns a free text query into tokens. Latin and CJK runs are separated, common Chinese particles

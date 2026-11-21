@@ -58,6 +58,7 @@ import suwayomi.tachidesk.graphql.types.MangaNodeList
 import suwayomi.tachidesk.graphql.types.MangaType
 import suwayomi.tachidesk.llm.LlmSearchService
 import suwayomi.tachidesk.manga.impl.search.MangaSearchAliases
+import suwayomi.tachidesk.manga.impl.search.MangaSearchRanking
 import suwayomi.tachidesk.manga.impl.search.MangaSearchText
 import suwayomi.tachidesk.manga.impl.search.MangaSearchVocabulary
 import suwayomi.tachidesk.manga.model.table.CategoryMangaTable
@@ -68,6 +69,7 @@ import suwayomi.tachidesk.manga.model.table.MangaStatus
 import suwayomi.tachidesk.manga.model.table.MangaTable
 import suwayomi.tachidesk.manga.model.table.MangaUserTable
 import suwayomi.tachidesk.manga.model.table.getWithUserData
+import suwayomi.tachidesk.server.serverConfig
 import java.util.concurrent.CompletableFuture
 
 class MangaQuery {
@@ -75,6 +77,15 @@ class MangaQuery {
         /** An LLM plan matching fewer rows than this is treated as too strict and skipped. */
         const val LLM_MIN_HITS = 20L
     }
+
+    /** One interpretation of the search text: what has to match, and what the hits are ranked by. */
+    private data class SearchTier(
+        val op: Op<Boolean>,
+        /** At least this many rows have to match for the tier to be used. */
+        val minHits: Long,
+        /** The terms the tier matched with; [MangaSearchRanking] scores the hits with them. */
+        val scoreTerms: List<String>,
+    )
 
     @RequireAuth
     fun manga(
@@ -403,7 +414,8 @@ class MangaQuery {
         // LLM interpretation (optional): the model decides what is a title, what is a tag and whether the
         // tags have to all match. Only used when enabled and the model answered; otherwise everything below
         // stays exactly as before, which is also the degradation path.
-        val llmOp: Op<Boolean>? = LlmSearchService.plan(search)?.let { llmPlan ->
+        val llmPlan = LlmSearchService.plan(search)
+        val llmOp: Op<Boolean>? = llmPlan?.let { plan ->
             // The model knows the meaning but not this library's wording, so every term it returns is widened
             // with the synonym table ("上位女" -> "御姐", "ブルアカ" -> "蔚蓝档案") before it is used. Titles
             // need this as much as tags: a series name is returned as a title term and the library stores it
@@ -419,29 +431,48 @@ class MangaQuery {
             // Several writings of one entity ("舰これ"/"舰c"/"舰队collection") are alternatives, not extra
             // requirements: OR them inside the group, AND the groups (a series plus one of its characters).
             val titleOps: List<Op<Boolean>> =
-                llmPlan.titleGroups().map { group ->
+                plan.titleGroups().map { group ->
                     group.map { term -> opFor(term) }.reduce { acc, op -> acc or op }
                 }
 
             val ops = titleOps.toMutableList()
-            if (llmPlan.tags.isNotEmpty()) {
-                val opsForTags: List<Op<Boolean>> = llmPlan.tags.map { tag -> opFor(tag) }
+            if (plan.tags.isNotEmpty()) {
+                val opsForTags: List<Op<Boolean>> = plan.tags.map { tag -> opFor(tag) }
                 ops +=
-                    if (llmPlan.tagsAreAny) {
+                    if (plan.tagsAreAny) {
                         opsForTags.reduce { acc, op -> acc or op }
                     } else {
                         opsForTags.reduce { acc, op -> acc and op }
                     }
             }
-            llmPlan.author?.let { author -> ops += opFor(author) }
+            plan.author?.let { author -> ops += opFor(author) }
             ops.reduceOrNull { acc, op -> acc and op }
         }
+
+        // What the LLM tier's hits are ranked by: the writings the model proposed, one per entity. Aliases
+        // are not added here: a book whose series is only stored under a cross language alias would score 0
+        // either way, and the alias expansion of the recall path already decided it is a hit.
+        val llmScoreTerms: List<String> =
+            llmPlan?.let { plan ->
+                plan.titleGroups().flatten() + plan.tags + listOfNotNull(plan.author)
+            }.orEmpty()
 
         // Always try the literal interpretation first: it is the only one that keeps "虐心的NTR" at the few
         // books matching both words instead of degenerating to all NTR entries.
         val strictFirst = strictOp != null && strictTokens.size > 1
 
-        fun runQuery(searchOp: Op<Boolean>?): QueryResults<Int?> =
+        val paginationNeeds = PaginationNeeds.of(dataFetchingEnvironment)
+
+        /**
+         * Runs one interpretation of the search and returns its hits.
+         *
+         * [scoreTerms] are the words this interpretation matched with; they decide the order of the hits
+         * when the caller did not ask for one itself (see [MangaSearchRanking]).
+         */
+        fun runQuery(
+            searchOp: Op<Boolean>?,
+            scoreTerms: List<String> = emptyList(),
+        ): QueryResults<Int?> =
             transaction {
                 val res = MangaTable.getWithUserData(userId).selectAll().applyOps(userId, condition, filter)
                 if (searchOp != null) {
@@ -452,29 +483,79 @@ class MangaQuery {
                 val deprecatedSort = listOfNotNull(orderBy?.let { MangaOrder(orderBy, orderByType) })
                 val actualSort = (order.orEmpty() + deprecatedSort + baseSort)
 
-                val (total, firstResult, lastResult) =
-                    res.applySortAndGetPaginationInfo(
-                        actualSort,
-                        before,
-                        last,
-                        MangaTable.id,
-                        PaginationNeeds.of(dataFetchingEnvironment),
-                    )
+                // Relevance ordering is only possible for a plain, forward window of a search: a cursor is
+                // built from a real column, and an explicit sort is the caller's own choice.
+                val relevanceTerms =
+                    scoreTerms.takeIf {
+                        it.isNotEmpty() &&
+                            searchOp != null &&
+                            before == null && after == null && last == null &&
+                            order.isNullOrEmpty() && orderBy == null &&
+                            serverConfig.searchRelevanceSortEnabled.value
+                    }
 
-                res.applyBeforeAfter(
-                    before = before,
-                    after = after,
-                    orderBy = order?.firstOrNull()?.by ?: MangaOrderBy.ID,
-                    orderByType = order?.firstOrNull()?.byType,
-                )
-
-                if (first != null) {
-                    res.limit(first).offset(offset?.toLong() ?: 0)
-                } else if (last != null) {
-                    res.limit(last)
+                // The tier is only accepted when it has enough hits, so the count is needed anyway; above
+                // [MangaSearchRanking.MAX_SORTED_HITS] it is also the reason not to sort.
+                val score = relevanceTerms?.let { terms ->
+                    val hits = res.copy().count()
+                    MangaSearchRanking
+                        .score(terms)
+                        ?.takeIf { hits in 1L..MangaSearchRanking.MAX_SORTED_HITS }
+                        ?.let { expression -> expression to hits }
                 }
 
-                QueryResults(total, firstResult, lastResult, res.toList())
+                if (score == null) {
+                    val (total, firstResult, lastResult) =
+                        res.applySortAndGetPaginationInfo(
+                            actualSort,
+                            before,
+                            last,
+                            MangaTable.id,
+                            paginationNeeds,
+                        )
+
+                    res.applyBeforeAfter(
+                        before = before,
+                        after = after,
+                        orderBy = order?.firstOrNull()?.by ?: MangaOrderBy.ID,
+                        orderByType = order?.firstOrNull()?.byType,
+                    )
+
+                    if (first != null) {
+                        res.limit(first).offset(offset?.toLong() ?: 0)
+                    } else if (last != null) {
+                        res.limit(last)
+                    }
+
+                    return@transaction QueryResults(total, firstResult, lastResult, res.toList())
+                }
+
+                val (expression, hits) = score
+
+                // Same as the id sort above: the best match first, the oldest book first among equals, so
+                // paging through the result stays stable.
+                fun sortedQuery(descending: Boolean) =
+                    res
+                        .copy()
+                        .orderBy(expression to SortOrder.DESC)
+                        .orderBy(
+                            MangaTable.id to if (descending) SortOrder.DESC else SortOrder.ASC,
+                        )
+
+                val (firstKey, lastKey) =
+                    if (paginationNeeds.bounds) {
+                        sortedQuery(descending = false).limit(1).firstOrNull()?.get(MangaTable.id)?.value to
+                            sortedQuery(descending = true).limit(1).firstOrNull()?.get(MangaTable.id)?.value
+                    } else {
+                        null to null
+                    }
+
+                val sorted = sortedQuery(descending = false)
+                if (first != null) {
+                    sorted.limit(first).offset(offset?.toLong() ?: 0)
+                }
+
+                QueryResults(hits, firstKey, lastKey, sorted.toList())
             }
 
         // Last resort: at least one of the known tokens has to match.
@@ -486,17 +567,17 @@ class MangaQuery {
         // rule based tiers ("傲慢的上位女" -> 傲慢 AND 上位女 = 3 books), and a precise-but-empty result is
         // worse for browsing than the broader rule based one, so a thin LLM plan falls through.
         val candidates =
-            buildList<Pair<Op<Boolean>, Long>> {
-                if (llmOp != null) add(llmOp to LLM_MIN_HITS)
-                if (strictFirst && strictOp != null) add(strictOp to 1L)
-                if (relaxedOp != null) add(relaxedOp to 1L)
-                if (orOp != null) add(orOp to 1L)
+            buildList {
+                if (llmOp != null) add(SearchTier(llmOp, LLM_MIN_HITS, llmScoreTerms))
+                if (strictFirst && strictOp != null) add(SearchTier(strictOp, 1L, strictTokens))
+                if (relaxedOp != null) add(SearchTier(relaxedOp, 1L, plan.allTerms + plan.anyTerms))
+                if (orOp != null) add(SearchTier(orOp, 1L, orTerms))
             }
 
         var queryResults: QueryResults<Int?>? = null
-        for ((searchOp, minHits) in candidates) {
-            val attempt = runQuery(searchOp)
-            if (attempt.total >= minHits && (attempt.total > 0L || attempt.results.isNotEmpty())) {
+        for (tier in candidates) {
+            val attempt = runQuery(tier.op, tier.scoreTerms)
+            if (attempt.total >= tier.minHits && (attempt.total > 0L || attempt.results.isNotEmpty())) {
                 queryResults = attempt
                 break
             }

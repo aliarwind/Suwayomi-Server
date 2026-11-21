@@ -1251,6 +1251,18 @@ class ServerConfig(
         max = 1440,
     )
 
+    /**
+     * Orders the hits of a free text library search by where the words were found (title before circle
+     * name before genre tag) instead of by id. See `MangaSearchRanking`. Turning it off restores the plain
+     * id order without touching the index; it has no effect on which books are found.
+     */
+    val searchRelevanceSortEnabled: MutableStateFlow<Boolean> by BooleanSetting(
+        protoNumber = 9509,
+        group = SettingGroup.MISC,
+        privacySafe = true,
+        defaultValue = true,
+    )
+
     /** ****************************************************************** **/
     /**                                                                    **/
     /**                          Renamed settings                          **/

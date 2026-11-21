@@ -152,4 +152,53 @@ class MangaSearchTextTest {
         val tokens = MangaSearchText.queryTokens("a b c d e f g h i j k l")
         assertEquals(MangaSearchText.MAX_QUERY_TOKENS, tokens.size)
     }
+
+    @Test
+    fun `every indexed token carries the field it came from`() {
+        val indexed =
+            MangaSearchText.index(
+                "光と塩非合理 (ブルーアーカイブ) [中国翻訳]",
+                "Yanje",
+                null,
+                "全彩",
+                StructuredTitle.Fields(
+                    cleanTitle = "光と塩非合理",
+                    series = "ブルーアーカイブ",
+                    characters = listOf("調月莉央"),
+                    circle = "翔玄亭",
+                    artist = "Yanje",
+                    aliases = listOf("蔚蓝档案"),
+                    flags = listOf("中国翻訳"),
+                ),
+            )
+
+        assertTrue(indexed.contains("T:光と塩非合理 "), indexed)
+        assertTrue(indexed.contains("S:ぶるーあーかいぶ "), indexed)
+        assertTrue(indexed.contains("C:调月莉央 "), indexed)
+        assertTrue(indexed.contains("N:翔玄亭 "), indexed)
+        assertTrue(indexed.contains("N:yanje "), indexed)
+        assertTrue(indexed.contains("X:蔚蓝档案 "), indexed)
+        assertTrue(indexed.contains("G:全彩 "), indexed)
+    }
+
+    @Test
+    fun `the index ends with a separator so an exact token can be matched`() {
+        assertTrue(MangaSearchText.index("Title", null, null, null).endsWith(" "))
+        assertEquals("", MangaSearchText.index(null, null, null, null))
+    }
+
+    @Test
+    fun `field markers stay out of the way of lowercase queries`() {
+        val indexed = MangaSearchText.index("Title", null, null, null)
+        // markers are uppercase because everything indexed is lowercased: "t:title" can never appear, so a
+        // one letter query cannot look like a field marker
+        assertTrue(!indexed.contains("t:title"), indexed)
+    }
+
+    @Test
+    fun `tokensOf splits a multi word value the way the index does`() {
+        assertEquals(listOf("fate", "grand", "order"), MangaSearchText.tokensOf("Fate/Grand Order"))
+        assertEquals(listOf("ぶるあか"), MangaSearchText.tokensOf("ブルアカ"))
+        assertEquals(emptyList(), MangaSearchText.tokensOf("  "))
+    }
 }
