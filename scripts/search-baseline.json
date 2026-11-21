@@ -1,0 +1,41 @@
+{
+  "note": "Search regression baseline, see scripts/search-baseline.ps1. Counts are tied to the library of the machine they were recorded on; re-run with -Update after a library update and read the diff before committing it.",
+  "librarySnapshot": {
+    "inLibrary": 48256,
+    "updatedAt": "2026-11-21"
+  },
+  "counts": [
+    { "query": "女主被NTR怀孕", "expected": 206 },
+    { "query": "女主是个婊子", "expected": 144 },
+    { "query": "穿cos服装做", "expected": 1 },
+    { "query": "女主角被当肉铠", "expected": 95 },
+    { "query": "小孩开大车", "expected": 227 },
+    { "query": "傲慢的上位女", "expected": 543 },
+    { "query": "虐心的NTR", "expected": 4 },
+    { "query": "像武田弘光的画风", "expected": 101 },
+    { "query": "女主是妓女、娼妇、婊子", "expected": 1 },
+    { "query": "肉欲的百合", "expected": 1181 },
+    { "query": "汉化", "expected": 7552 },
+    { "query": "中国翻訳", "expected": 107 },
+    { "query": "DL版", "expected": 86 },
+    { "query": "無修正", "expected": 6153 },
+    { "query": "舰C", "expected": 699 },
+    { "query": "ブルアカ", "expected": 2414 },
+    { "query": "マシュ", "expected": 243 },
+    { "query": "海贼王", "expected": 188 }
+  ],
+  "intent": [
+    { "query": "作者是ie", "expected": 139 },
+    { "query": "ie", "expected": 961 },
+    { "query": "社团是ie研究室", "expected": 9 },
+    { "query": "画师是あんこまん", "expected": 267 },
+    { "query": "作者是武田弘光", "expected": 91 }
+  ],
+  "ranking": [
+    { "query": "作者是ie", "targetId": 576, "maxRank": 3, "top": 10 },
+    { "query": "舰C", "top": 5, "titleMatchesAny": ["艦これ", "艦隊これくしょん", "kancolle"] },
+    { "query": "マシュ", "top": 5, "titleMatchesAny": ["マシュ", "玛修", "瑪修", "mash"] },
+    { "query": "ブルアカ", "top": 5, "titleMatchesAny": ["ブルアカ", "ブルーアーカイブ", "blue archive", "蔚蓝档案", "碧蓝档案"] },
+    { "query": "像武田弘光的画风", "top": 5, "titleMatchesAny": ["武田弘光", "takeda"] }
+  ]
+}
