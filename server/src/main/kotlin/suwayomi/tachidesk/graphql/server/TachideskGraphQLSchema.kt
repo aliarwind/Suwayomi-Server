@@ -52,6 +52,7 @@ import suwayomi.tachidesk.graphql.queries.ExtensionStoreQuery
 import suwayomi.tachidesk.graphql.queries.InfoQuery
 import suwayomi.tachidesk.graphql.queries.KoreaderSyncQuery
 import suwayomi.tachidesk.graphql.queries.LlmQuery
+import suwayomi.tachidesk.graphql.queries.MangaDuplicateQuery
 import suwayomi.tachidesk.graphql.queries.MangaQuery
 import suwayomi.tachidesk.graphql.queries.MetaQuery
 import suwayomi.tachidesk.graphql.queries.RefreshQuery
@@ -127,6 +128,7 @@ object GraphQLSchemaProvider {
                         TopLevelObject(InfoQuery()),
                         TopLevelObject(KoreaderSyncQuery()),
                         TopLevelObject(LlmQuery()),
+                        TopLevelObject(MangaDuplicateQuery()),
                         TopLevelObject(MangaQuery()),
                         TopLevelObject(MetaQuery()),
                         TopLevelObject(RefreshQuery()),

@@ -141,6 +141,19 @@ object MangaSearchText {
     }
 
     /**
+     * [normalize] without the traditional to simplified step.
+     *
+     * The ICU transliterator behind that step costs about 0.2 ms per call, which is fine for the handful of
+     * query strings a search normalizes but not for a pass over the whole library (48k titles = ~10 s).
+     * Callers that only need a stable key for a large number of titles use this instead and accept that
+     * traditional and simplified spellings of the same title do not fold together.
+     */
+    fun normalizeFast(raw: String?): String {
+        if (raw.isNullOrBlank()) return ""
+        return foldKana(Normalizer.normalize(raw, Normalizer.Form.NFKC).lowercase(Locale.ROOT))
+    }
+
+    /**
      * Builds the indexed text for a manga: normalized title, author, artist and genre tokens joined by
      * single spaces.
      *
