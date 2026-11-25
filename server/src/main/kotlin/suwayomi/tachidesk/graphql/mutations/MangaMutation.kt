@@ -50,6 +50,8 @@ import java.util.concurrent.CompletableFuture
  * - Delete read/all downloaded chapters
  */
 class MangaMutation {
+    private val logger = KotlinLogging.logger {}
+
     private val updater: IUpdater by injectLazy()
 
     data class UpdateMangaPatch(
@@ -158,20 +160,34 @@ class MangaMutation {
                 // When removing from library, clean up downloads for these manga
                 if (!patch.inLibrary) {
                     ids.forEach { mangaId ->
-                        try {
-                            val chapterIds =
+                        val chapterIds =
+                            try {
                                 transaction {
                                     ChapterTable
                                         .select(ChapterTable.id)
                                         .where { ChapterTable.manga eq mangaId }
                                         .map { it[ChapterTable.id].value }
                                 }
-                            if (chapterIds.isNotEmpty()) {
-                                Chapter.deleteDownloadedChapters(userId, chapterIds)
-                                DownloadManager.dequeue(userId, chapterIds)
+                            } catch (e: Exception) {
+                                logger.warn(e) { "Could not list the chapters of manga $mangaId for the download cleanup" }
+                                emptyList()
                             }
+
+                        if (chapterIds.isEmpty()) return@forEach
+
+                        // Deleting the files can fail (locked files on Windows), but the queue entry has to go
+                        // regardless: the queue is persisted, so a chapter left behind there keeps showing up as
+                        // "queued" in every client, even after a restart.
+                        try {
+                            Chapter.deleteDownloadedChapters(userId, chapterIds)
                         } catch (e: Exception) {
-                            // Ignore errors during download cleanup
+                            logger.warn(e) { "Could not delete the downloaded chapters of manga $mangaId" }
+                        }
+
+                        try {
+                            DownloadManager.dequeue(userId, chapterIds)
+                        } catch (e: Exception) {
+                            logger.warn(e) { "Could not dequeue the chapters of manga $mangaId" }
                         }
                     }
                 }
