@@ -25,6 +25,7 @@ import suwayomi.tachidesk.manga.impl.extension.Extension.proxyExtensionIconUrl
 import suwayomi.tachidesk.manga.model.dataclass.ContentWarning
 import suwayomi.tachidesk.manga.model.dataclass.ExtensionDataClass
 import suwayomi.tachidesk.manga.model.dataclass.ExtensionInfo
+import suwayomi.tachidesk.manga.model.table.ExtensionStoreTable
 import suwayomi.tachidesk.manga.model.table.ExtensionTable
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Duration.Companion.seconds
@@ -36,20 +37,26 @@ object ExtensionsList {
     var updateMap = ConcurrentHashMap<String, ExtensionInfo>()
 
     suspend fun fetchExtensions() {
+        val fetchedStores = ExtensionStoreService.getAndRefresh()
         val allExtensions = mutableListOf<ExtensionInfo>()
+        val failedStoreIndexUrls =
+            transaction {
+                ExtensionStoreTable.selectAll().map { it[ExtensionStoreTable.indexUrl] }.toSet()
+            }.minus(fetchedStores.map { it.indexUrl }.toSet()).toMutableSet()
 
-        ExtensionStoreService.getAndRefresh().forEach { store ->
+        fetchedStores.forEach { store ->
             try {
                 val extensions = ExtensionStoreService.getExtensions(store)
                 allExtensions.addAll(extensions)
             } catch (e: Exception) {
+                failedStoreIndexUrls.add(store.indexUrl)
                 logger.warn(e) {
                     "Failed to fetch extensions for store: ${store.indexUrl}"
                 }
             }
         }
 
-        updateExtensionDatabase(allExtensions)
+        updateExtensionDatabase(allExtensions, failedStoreIndexUrls)
     }
 
     suspend fun fetchExtensionsCached() {
@@ -91,7 +98,10 @@ object ExtensionsList {
 
     private val updateExtensionDatabaseMutex = Mutex()
 
-    private suspend fun updateExtensionDatabase(foundExtensions: List<ExtensionInfo>) {
+    private suspend fun updateExtensionDatabase(
+        foundExtensions: List<ExtensionInfo>,
+        failedStoreIndexUrls: Set<String> = emptySet(),
+    ) {
         updateExtensionDatabaseMutex.withLock {
             transaction {
                 val uniqueExtensions =
@@ -109,9 +119,13 @@ object ExtensionsList {
                 val extensionsToUpdate = mutableListOf<Pair<ExtensionInfo, ResultRow>>()
                 val extensionsToInsert = mutableListOf<ExtensionInfo>()
                 val extensionsToDelete =
-                    installedExtensions.filter { it.value[ExtensionTable.storeIndexUrl] != null }.mapNotNull { (pkgName, extension) ->
-                        extension.takeUnless { uniqueExtensions.any { it.pkgName == pkgName } }
-                    }
+                    installedExtensions
+                        .filter { it.value[ExtensionTable.storeIndexUrl] != null }
+                        // a store that could not be refreshed says nothing about its extensions being gone
+                        .filterNot { it.value[ExtensionTable.storeIndexUrl] in failedStoreIndexUrls }
+                        .mapNotNull { (pkgName, extension) ->
+                            extension.takeUnless { uniqueExtensions.any { it.pkgName == pkgName } }
+                        }
 
                 uniqueExtensions.forEach {
                     val extension = installedExtensions[it.pkgName]

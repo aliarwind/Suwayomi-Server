@@ -17,6 +17,7 @@ import eu.kanade.tachiyomi.source.Source
 import eu.kanade.tachiyomi.source.SourceFactory
 import eu.kanade.tachiyomi.source.local.LocalSource
 import io.github.oshai.kotlinlogging.KotlinLogging
+import kotlinx.coroutines.delay
 import net.dongliu.apk.parser.ApkFile
 import net.dongliu.apk.parser.bean.Icon
 import okhttp3.CacheControl
@@ -60,12 +61,14 @@ import suwayomi.tachidesk.server.database.dbTransaction
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
 import uy.kohesive.injekt.injectLazy
+import java.io.IOException
 import java.io.InputStream
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.Path
 import kotlin.io.path.absolutePathString
@@ -690,23 +693,52 @@ object Extension {
         url: String,
         savePath: Path,
     ) {
-        val response =
-            network.client
-                .newCall(
-                    GET(url, cache = CacheControl.FORCE_NETWORK),
-                ).await()
+        var lastError: Exception? = null
+        repeat(DOWNLOAD_ATTEMPTS) { attempt ->
+            try {
+                val response =
+                    network.client
+                        .newCall(
+                            GET(url, cache = CacheControl.FORCE_NETWORK),
+                        ).await()
 
-        savePath.createParentDirectories()
-        response.body.byteStream().use {
-            savePath.outputStream().buffered().use { out ->
-                it.copyTo(out)
+                savePath.createParentDirectories()
+                response.body.byteStream().use {
+                    savePath.outputStream().buffered().use { out ->
+                        it.copyTo(out)
+                    }
+                }
+                return
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                savePath.deleteIfExists()
+
+                // a 4xx response means the url itself is gone (stale release tag), retrying it is pointless
+                if (isStaleDownloadUrlError(e)) throw e
+
+                // the connection of this device to the extension stores is flaky (TLS handshake resets),
+                // a single failed attempt is not a reason to fail the whole installation
+                lastError = e
+                logger.warn(e) {
+                    "Failed to download extension from '$url' (attempt ${attempt + 1}/$DOWNLOAD_ATTEMPTS)"
+                }
+                if (attempt + 1 < DOWNLOAD_ATTEMPTS) {
+                    delay(DOWNLOAD_RETRY_DELAY_MS * (attempt + 1))
+                }
             }
         }
+
+        throw lastError ?: IOException("Failed to download extension from '$url'")
     }
+
+    private fun isStaleDownloadUrlError(error: Throwable): Boolean = error.message?.matches(Regex("^HTTP error 4\\d\\d$")) == true
 
     private val filesToDeleteOnStartup = ConcurrentHashMap.newKeySet<String>()
     private val preferences = Injekt.get<Application>().getSharedPreferences(Extension.javaClass.name, Context.MODE_PRIVATE)
     private const val FILES_TO_DELETE = "files_to_delete"
+    private const val DOWNLOAD_ATTEMPTS = 3
+    private const val DOWNLOAD_RETRY_DELAY_MS = 1_000L
 
     fun cleanupExtensionFiles() {
         logger.debug { "Cleanup extension files that could not be deleted during extension update/deinstallation" }
@@ -762,19 +794,46 @@ object Extension {
     }
 
     suspend fun updateExtension(pkgName: String): String {
-        val targetExtension =
-            checkNotNull(ExtensionsList.updateMap[pkgName]) {
-                "Extension update information for \"$pkgName\" missing. Refetch the extensions"
+        // The update information only lives in memory (lost on restart / when the store refresh failed) and the
+        // download urls stored in the database go stale as soon as the store rebuilds its release assets, which
+        // changes the release tag the urls point to. Both cases used to make the update fail, so refresh first.
+        if (!ExtensionsList.updateMap.containsKey(pkgName)) {
+            logger.warn { "No cached update information for \"$pkgName\", refreshing the extension stores first" }
+            refreshExtensionStores(pkgName)
+        }
+
+        val result =
+            try {
+                installExtension(pkgName, true)
+            } catch (e: Exception) {
+                if (!isStaleDownloadUrlError(e)) throw e
+
+                logger.warn { "Download of \"$pkgName\" failed with \"${e.message}\", refreshing the extension stores" }
+                if (!refreshExtensionStores(pkgName)) throw e
+                logger.warn { "Retrying the update of \"$pkgName\" with the refreshed urls" }
+                installExtension(pkgName, true)
             }
-
-        logger.debug { "Updating $pkgName to ${targetExtension.versionName}" }
-
-        val result = installExtension(pkgName, true)
 
         ExtensionsList.updateMap.remove(pkgName)
 
         return result
     }
+
+    /** @return whether the stored download urls of the extension changed, i.e. whether a retry can succeed */
+    private suspend fun refreshExtensionStores(pkgName: String): Boolean {
+        val oldUrls = downloadUrlsOf(pkgName)
+        runCatching { ExtensionsList.fetchExtensions() }
+            .onFailure { logger.warn(it) { "Failed to refresh the extension stores, using the stored urls" } }
+        return oldUrls != null && oldUrls != downloadUrlsOf(pkgName)
+    }
+
+    private fun downloadUrlsOf(pkgName: String): Pair<String?, String?>? =
+        transaction {
+            ExtensionTable
+                .select(ExtensionTable.jarUrl, ExtensionTable.apkUrl)
+                .where { ExtensionTable.pkgName eq pkgName }
+                .firstOrNull()
+        }?.let { it[ExtensionTable.jarUrl] to it[ExtensionTable.apkUrl] }
 
     suspend fun getExtensionIcon(pkgName: String): Pair<InputStream, String> {
         val cacheSaveDir = "${applicationDirs.extensionsRoot}/icon"
