@@ -194,6 +194,24 @@ object WebInterfaceManager {
             setupWebUI()
             isSetupComplete.value = true
         }
+
+        // Whatever removes the served copy (disk cleanup, a cleaner, a failed update), every request used to
+        // fail with FileNotFoundException until the server was restarted. Put it back instead.
+        @OptIn(DelicateCoroutinesApi::class)
+        GlobalScope.launchIO {
+            while (true) {
+                delay(30_000)
+                runCatching {
+                    val index = File(applicationDirs.webUIServe, "index.html")
+                    if (!index.exists() && File(applicationDirs.webUIRoot).exists()) {
+                        logger.warn { "Served webUI is missing at ${applicationDirs.webUIServe}, recreating it" }
+                        createServableRoot()
+                    }
+                }.onFailure {
+                    logger.warn(it) { "Failed to recreate the served webUI" }
+                }
+            }
+        }
     }
 
     private fun createServableRoot(): String {

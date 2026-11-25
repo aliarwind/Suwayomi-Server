@@ -97,7 +97,14 @@ class ApplicationDirs(
     val localMangaRoot
         get() = serverConfig.localSourcePath.value.ifBlank { "$dataRoot/local" }
     val webUIRoot = "$dataRoot/webUI"
-    val webUIServe = "$tempRoot/webUI-serve"
+
+    /**
+     * The webUI is served from a copy of [webUIRoot] and used to live in [tempRoot], where windows disk
+     * cleanup (and third party cleaners) removed it while the server was running: serving then failed with
+     * `FileNotFoundException: ...\webUI-serve\index.html` and the page stayed blank until a restart. The data
+     * directory is not cleaned up behind the server's back.
+     */
+    val webUIServe = "$dataRoot/webUI-serve"
     val automatedBackupRoot
         get() = serverConfig.backupPath.value.ifBlank { "$dataRoot/backups" }
 
